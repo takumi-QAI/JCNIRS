@@ -1,3 +1,6 @@
+# 秘密情報
+.env
+
 # Python
 __pycache__/
 *.py[cod]

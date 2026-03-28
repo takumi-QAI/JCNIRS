@@ -35,6 +35,9 @@ import sys
 import copy
 import time
 import warnings
+from dotenv import load_dotenv
+
+load_dotenv()  # .env ファイルから環境変数を読み込み
 
 import numpy as np
 import pandas as pd
@@ -112,7 +115,7 @@ CONFIG_FS = {
     #   Amplify AE のトークンとソルバー設定
     #   将来 D-Wave に切り替える場合は client 部分を差し替えるだけ
     "amplify": {
-        "token":            "REPLACED_TOKEN",
+        "token":            os.environ.get("AMPLIFY_TOKEN", ""),
         "n_candidates":     300,    # 事前フィルタ: MI 上位 N 個を QUBO の候補に
         "n_features":       200,    # QUBO で最終的に選択する特徴量数
         "lambda_redundancy": 0.5,   # 冗長性ペナルティの重み (大きい=多様性重視)
