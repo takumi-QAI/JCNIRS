@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# 生成物
+submissions_*/
+submissions/
+*.png
+
+# データ（大きいファイルはGitに含めない場合はコメント解除）
+# train.csv
+# test.csv
+# sample_submit.csv
+
+# OS
+Thumbs.db
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
