@@ -11,6 +11,8 @@ RUN pip install --no-cache-dir \
 RUN pip install --no-cache-dir \
     torch --index-url https://download.pytorch.org/whl/cpu
 
+RUN pip install --no-cache-dir amplify
+
 COPY . /app
 
 CMD ["python", "JCNIRS_feature_selection.py"]
