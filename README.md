@@ -42,10 +42,17 @@ python run_all.py
 ### Docker（推奨）
 
 ```powershell
-docker build -t jcnirs .                                  # 初回のみ
-docker run --rm --name jcnirs_run -v ${PWD}:/app jcnirs   # 実行
-docker run --rm -it --name jcnirs_shell -v ${PWD}:/app jcnirs bash  # 手動操作
+docker build -t jcnirs .                                          # 初回のみ
+docker run --rm --gpus all --name jcnirs_run -v ${PWD}:/app jcnirs  # GPU 実行
+docker run --rm -it --gpus all -v ${PWD}:/app jcnirs bash          # 手動操作
 ```
+
+> 🎮 **GPU 利用**: Dockerfile は CUDA 版 PyTorch を導入済みなので、NVIDIA GPU が
+> あれば `docker run` に **`--gpus all`** を付けるだけで深層モデルが GPU で動きます
+> （コードは `models/base.py` の `get_device()` で CUDA を自動選択）。
+> `--gpus all` を付けなければ自動的に CPU で実行されます。
+> GPU が無い環境では Dockerfile の torch 行を CPU ビルド
+> (`--index-url https://download.pytorch.org/whl/cpu`) に戻してください。
 
 ### Python に直接インストール
 
