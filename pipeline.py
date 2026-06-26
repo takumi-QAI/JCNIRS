@@ -373,13 +373,28 @@ def create_all_submissions(
     meta_ridge, meta_lasso, test_matrix,
     wa_test_pred, overall_best,
     ridge_cv, lasso_cv, wa_cv, config,
+    y_train=None, ridge_oof=None, lasso_oof=None, wa_oof=None, top_k=10,
 ):
-    """全モデル×前処理の個別予測 + アンサンブル予測を CSV に出力する。"""
+    """全モデル×前処理の個別予測 + アンサンブル予測を CSV に出力する。
+
+    さらに、全候補 (個別 combo + アンサンブル 3 種) を CV-RMSE 昇順
+    (= R2 / RPD / RPIQ でも最良順。これらは RMSE の単調関数) でランキングし、
+    上位 top_k 件を sub_BEST_1.csv 〜 sub_BEST_{k}.csv として出力する。
+    ランキング表は sub_BEST_ranking.csv に保存。
+    """
     _header("Step 7: 全提出ファイルの作成")
 
     sub_dir = os.path.join(config["data_dir"], config["submission_dir"])
     os.makedirs(sub_dir, exist_ok=True)
     test_ids = df_test[config["id_col"]].values
+
+    # 前回実行の sub_BEST*.csv を掃除 (古いランクの残骸が混ざらないように)
+    for f in os.listdir(sub_dir):
+        if f.startswith("sub_BEST"):
+            try:
+                os.remove(os.path.join(sub_dir, f))
+            except OSError:
+                pass
 
     def _save(fname, pred):
         path = os.path.join(sub_dir, fname)
@@ -404,48 +419,73 @@ def create_all_submissions(
     _save("sub_ensemble_stacking_ridge.csv", ridge_pred)
     _save("sub_ensemble_stacking_lasso.csv", lasso_pred)
     _save("sub_ensemble_weighted_avg.csv",   wa_test_pred)
+    print("    3 ファイル作成 (Ridge / Lasso / WA)")
 
-    # ベスト手法を判定
-    ens_summary = pd.DataFrame({
-        "Method": [
-            f"Single Best ({overall_best['Model']} × "
-            f"{overall_best['Preprocessor']})",
-            "Stacking Ridge",
-            "Stacking Lasso",
-            "Weighted Average",
-        ],
-        "CV-RMSE": [
-            overall_best["CV-RMSE"], ridge_cv, lasso_cv, wa_cv,
-        ],
-    }).sort_values("CV-RMSE")
+    # ---- 全候補のランキング → 上位 top_k を sub_BEST_n.csv に出力 ----
+    metric_keys = config.get("metrics", DEFAULT_METRICS)
 
-    best_method = ens_summary.iloc[0]["Method"]
-    if "Stacking Ridge" in best_method:
-        best_pred = ridge_pred
-    elif "Stacking Lasso" in best_method:
-        best_pred = lasso_pred
-    elif "Weighted Average" in best_method:
-        best_pred = wa_test_pred
-    else:
-        best_pred = all_test_preds[overall_best["combo_key"]]
+    candidates = []
+    # 個別 combo (指標は df_results に算出済み)
+    for _, row in df_results.iterrows():
+        scores = {m: float(row[cv_column(m)])
+                  for m in metric_keys if cv_column(m) in row}
+        candidates.append({
+            "name":    row["combo_key"],
+            "kind":    "single",
+            "rmse":    float(row["CV-RMSE"]),
+            "metrics": scores,
+            "test":    all_test_preds[row["combo_key"]],
+        })
+    # アンサンブル 3 種 (OOF があれば全指標を算出、無ければ RMSE のみ)
+    ens_items = [
+        ("ensemble_stacking_ridge", ridge_pred, ridge_oof, ridge_cv),
+        ("ensemble_stacking_lasso", lasso_pred, lasso_oof, lasso_cv),
+        ("ensemble_weighted_avg",   wa_test_pred, wa_oof, wa_cv),
+    ]
+    for name, tpred, oof, rmse in ens_items:
+        if oof is not None and y_train is not None:
+            scores = compute_metrics(y_train, oof, metric_keys)
+            rmse = scores["RMSE"]
+        else:
+            scores = {"RMSE": rmse}
+        candidates.append({
+            "name": name, "kind": "ensemble",
+            "rmse": float(rmse), "metrics": scores, "test": tpred,
+        })
 
-    _save("sub_BEST.csv", best_pred)
-    print("    4 ファイル作成 (Ridge / Lasso / WA / BEST)")
+    # CV-RMSE 昇順 = R2 / RPD / RPIQ でも最良順 (RMSE の単調変換のため)
+    candidates.sort(key=lambda c: c["rmse"])
+    k = min(top_k, len(candidates))
+
+    print(f"\n  --- 上位 {k} を sub_BEST_1..{k}.csv に出力 ---")
+    rank_rows = []
+    for i, c in enumerate(candidates[:k], 1):
+        _save(f"sub_BEST_{i}.csv", c["test"])
+        rr = {"rank": i, "method": c["name"], "kind": c["kind"]}
+        for m in metric_keys:
+            rr[m] = c["metrics"].get(m, float("nan"))
+        rank_rows.append(rr)
+
+    rank_df = pd.DataFrame(rank_rows)
+    rank_df.to_csv(os.path.join(sub_dir, "sub_BEST_ranking.csv"), index=False)
+    print(f"    ランキング表: sub_BEST_ranking.csv")
 
     # ---- サマリ ----
-    total = len(all_test_preds) + 4
+    total = len(all_test_preds) + 3 + k
     print(f"\n  合計 {total} 個の提出ファイルを "
           f"{config['submission_dir']}/ に保存しました")
 
-    print("\n  --- アンサンブル比較 ---")
-    print(ens_summary.to_string(index=False))
-    print(f"\n  >>> 推奨: {best_method}  "
-          f"(CV-RMSE = {ens_summary.iloc[0]['CV-RMSE']:.4f})")
+    print("\n  --- 提出候補ランキング (上位) ---")
+    print(rank_df.to_string(index=False))
+    print(f"\n  >>> 推奨提出: sub_BEST_1.csv  "
+          f"({candidates[0]['name']}, CV-RMSE = {candidates[0]['rmse']:.4f})")
+    print("      ※ CV-RMSE 順 = R2 / RPD / RPIQ 順 (これらは RMSE の単調関数)")
 
-    print("\n  BEST submission プレビュー (先頭 5 行):")
+    best_pred = candidates[0]["test"]
+    print("\n  sub_BEST_1 プレビュー (先頭 5 行):")
     print(pd.DataFrame({"id": test_ids, "pred": best_pred})
           .head().to_string(index=False))
-    print(f"\n  テスト予測統計:")
+    print(f"\n  テスト予測統計 (sub_BEST_1):")
     print(f"    Mean = {best_pred.mean():.2f}  "
           f"Std = {best_pred.std():.2f}  "
           f"Min = {best_pred.min():.2f}  "

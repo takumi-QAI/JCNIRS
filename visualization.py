@@ -44,18 +44,25 @@ sns.set_theme(style="whitegrid")
 # ============================================================
 # 共通ヘルパー
 # ============================================================
-def _fig_dir(config):
+def _fig_dir(config, subdir=""):
     d = os.path.join(config["data_dir"], config.get("figure_dir", "figures"))
+    if subdir:
+        d = os.path.join(d, *subdir.split("/"))
     os.makedirs(d, exist_ok=True)
     return d
 
 
-def _save(fig, config, fname):
-    path = os.path.join(_fig_dir(config), fname)
+def _save(fig, config, fname, subdir=""):
+    """図を figures/<subdir>/<fname> に保存する (subdir でフォルダ分け)。"""
+    path = os.path.join(_fig_dir(config, subdir), fname)
     fig.tight_layout()
     fig.savefig(path, dpi=config.get("figure_dpi", 150), bbox_inches="tight")
     plt.close(fig)
-    print(f"    保存: {os.path.join(config.get('figure_dir', 'figures'), fname)}")
+    rel_parts = [config.get("figure_dir", "figures")]
+    if subdir:
+        rel_parts.append(subdir)
+    rel_parts.append(fname)
+    print(f"    保存: {'/'.join(rel_parts)}")
     return path
 
 
@@ -89,7 +96,7 @@ def plot_target_distribution(y, config):
 
     fig.suptitle("Target distribution — motivation for log1p transform",
                  fontsize=13)
-    return _save(fig, config, "eda_target_distribution.png")
+    return _save(fig, config, "eda_target_distribution.png", subdir="eda")
 
 
 def plot_spectra_overview(X_spec, wavelengths, y, config, n_samples=40):
@@ -130,7 +137,7 @@ def plot_spectra_overview(X_spec, wavelengths, y, config, n_samples=40):
     if wl[0] > wl[-1]:
         ax.invert_xaxis()
 
-    return _save(fig, config, "eda_spectra_overview.png")
+    return _save(fig, config, "eda_spectra_overview.png", subdir="eda")
 
 
 # ============================================================
@@ -143,7 +150,7 @@ def _metric_cmap(metric_key):
     return "RdYlGn_r" if better == "low" else "RdYlGn"
 
 
-def plot_metric_heatmaps(df_results, config, prefix="",
+def plot_metric_heatmaps(df_results, config, prefix="", subdir="",
                          metrics=("RMSE", "R2", "RPD")):
     """Model × 前処理 の指標ヒートマップ (指標ごとに 1 枚)。"""
     metrics = [m for m in metrics
@@ -157,10 +164,10 @@ def plot_metric_heatmaps(df_results, config, prefix="",
         sns.heatmap(pivot, annot=True, fmt=".2f", cmap=_metric_cmap(mkey),
                     linewidths=0.5, ax=ax, cbar_kws={"label": mkey})
         ax.set_title(f"{mkey}  (Model × Preprocessor)")
-    return _save(fig, config, f"{prefix}heatmap_metrics.png")
+    return _save(fig, config, f"{prefix}heatmap_metrics.png", subdir=subdir)
 
 
-def plot_model_metric_bars(df_results, config, prefix="",
+def plot_model_metric_bars(df_results, config, prefix="", subdir="",
                            metrics=("RMSE", "R2", "RPD")):
     """各モデルのベスト前処理での指標を棒グラフで比較。"""
     metrics = [m for m in metrics
@@ -179,10 +186,11 @@ def plot_model_metric_bars(df_results, config, prefix="",
         ax.set_xlabel(mkey)
         ax.set_title(f"Best-per-model: {mkey}")
         ax.invert_yaxis()
-    return _save(fig, config, f"{prefix}barplot_model_metrics.png")
+    return _save(fig, config, f"{prefix}barplot_model_metrics.png",
+                 subdir=subdir)
 
 
-def plot_pred_vs_actual(series, config, fname, suptitle=""):
+def plot_pred_vs_actual(series, config, fname, suptitle="", subdir=""):
     """OOF 予測 vs 実測の散布図 (1:1 線つき)。
 
     series : list[(name, y_true, y_pred)]
@@ -207,10 +215,10 @@ def plot_pred_vs_actual(series, config, fname, suptitle=""):
         ax.legend(loc="lower right")
     if suptitle:
         fig.suptitle(suptitle, fontsize=13)
-    return _save(fig, config, fname)
+    return _save(fig, config, fname, subdir=subdir)
 
 
-def plot_residuals(name, y_true, y_pred, config, fname):
+def plot_residuals(name, y_true, y_pred, config, fname, subdir=""):
     """残差 vs 予測 と 残差ヒストグラム。"""
     y_true = np.asarray(y_true, float); y_pred = np.asarray(y_pred, float)
     resid = y_pred - y_true
@@ -229,7 +237,7 @@ def plot_residuals(name, y_true, y_pred, config, fname):
     axes[1].set_ylabel("count")
     axes[1].set_title("Residual distribution")
 
-    return _save(fig, config, fname)
+    return _save(fig, config, fname, subdir=subdir)
 
 
 # ============================================================
@@ -257,7 +265,8 @@ def plot_strategy_comparison(results, config,
             ax.text(b.get_x() + b.get_width() / 2, b.get_height(),
                     f"{v:.2f}", ha="center", va="bottom", fontsize=9)
     fig.suptitle("Feature-selection strategies × accuracy metrics", fontsize=13)
-    return _save(fig, config, "compare_strategy_metrics.png")
+    return _save(fig, config, "compare_strategy_metrics.png",
+                 subdir="comparison")
 
 
 def plot_features_vs_accuracy(results, config):
@@ -281,7 +290,8 @@ def plot_features_vs_accuracy(results, config):
         ax.set_title(f"{name} vs #features ({'lower' if better=='low' else 'higher'} = better)")
     fig.suptitle("Accuracy vs feature-set size (efficiency of selection)",
                  fontsize=13)
-    return _save(fig, config, "compare_features_vs_accuracy.png")
+    return _save(fig, config, "compare_features_vs_accuracy.png",
+                 subdir="comparison")
 
 
 def plot_runtime(results, config):
@@ -297,7 +307,7 @@ def plot_runtime(results, config):
     for b, v in zip(bars, times):
         ax.text(b.get_x() + b.get_width() / 2, b.get_height(),
                 f"{v:.0f}s", ha="center", va="bottom", fontsize=9)
-    return _save(fig, config, "compare_runtime.png")
+    return _save(fig, config, "compare_runtime.png", subdir="comparison")
 
 
 def plot_feature_count(masks, config):
@@ -313,7 +323,7 @@ def plot_feature_count(masks, config):
     for b, v in zip(bars, counts):
         ax.text(b.get_x() + b.get_width() / 2, b.get_height(),
                 str(v), ha="center", va="bottom", fontsize=9)
-    return _save(fig, config, "compare_feature_count.png")
+    return _save(fig, config, "compare_feature_count.png", subdir="comparison")
 
 
 def plot_selected_wavelengths(masks, wavelengths, mean_spectrum, config):
@@ -337,7 +347,8 @@ def plot_selected_wavelengths(masks, wavelengths, mean_spectrum, config):
     axes[-1, 0].set_xlabel("wavenumber [cm$^{-1}$]")
     fig.suptitle("Selected wavelengths overlaid on the mean spectrum",
                  fontsize=13)
-    return _save(fig, config, "compare_selected_wavelengths.png")
+    return _save(fig, config, "compare_selected_wavelengths.png",
+                 subdir="comparison")
 
 
 def plot_feature_overlap(masks, config):
@@ -357,7 +368,8 @@ def plot_feature_overlap(masks, config):
                 xticklabels=strategies, yticklabels=strategies,
                 vmin=0, vmax=1, ax=ax, cbar_kws={"label": "Jaccard similarity"})
     ax.set_title("Overlap of selected feature sets (Jaccard)")
-    return _save(fig, config, "compare_feature_overlap.png")
+    return _save(fig, config, "compare_feature_overlap.png",
+                 subdir="comparison")
 
 
 def plot_qubo_diagnostics(masks, X_spec, y, config):
@@ -416,4 +428,5 @@ def plot_qubo_diagnostics(masks, X_spec, y, config):
 
     fig.suptitle("Feature-selection quality: relevance vs redundancy",
                  fontsize=13)
-    return _save(fig, config, "compare_qubo_diagnostics.png")
+    return _save(fig, config, "compare_qubo_diagnostics.png",
+                 subdir="comparison")

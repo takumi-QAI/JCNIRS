@@ -104,12 +104,16 @@ JCNIRS/
 ## 出力されるもの
 
 ```
-submissions_none/      submissions_filter/    submissions_wrapper/
-submissions_embedded/  submissions_amplify/   # 各戦略の提出ファイル群
-figures/                                       # 全可視化（PNG）
+submissions_none/  submissions_filter/  submissions_wrapper/
+submissions_embedded/  submissions_amplify/        # 各戦略の提出ファイル群
+figures/
+├── eda/                                           # データ概観
+├── strategies/<strategy>/                         # 戦略ごと（モデル比較など）
+└── comparison/                                     # 戦略横断（量子アニーリング比較）
 ```
 
-`figures/` の中身は [可視化（出力図カタログ）](#可視化出力図カタログ) を参照。
+図はカテゴリ別のサブフォルダに整理されます（ファイル名は変わりません）。
+中身は [可視化（出力図カタログ）](#可視化出力図カタログ) を参照。
 
 ---
 
@@ -226,16 +230,22 @@ OOF（5-fold 交差検証）予測を元スケール（含水率 [%]）で評価
 
 ## 可視化（出力図カタログ）
 
-すべて `figures/` に PNG 出力。図中テキストは日本語フォント非依存のため英語表記
-（意味は [docs/REPORT_GUIDE.md](docs/REPORT_GUIDE.md)）。
+`figures/` 以下にカテゴリ別サブフォルダで PNG 出力（ファイル名は固定）。図中テキストは
+日本語フォント非依存のため英語表記（意味は [docs/REPORT_GUIDE.md](docs/REPORT_GUIDE.md)）。
 
-### EDA（データ概観・1回）
+| サブフォルダ | 内容 |
+|--------------|------|
+| `figures/eda/` | データ概観（EDA） |
+| `figures/strategies/<strategy>/` | 戦略ごと（モデル×前処理の比較・予測診断） |
+| `figures/comparison/` | 戦略横断（量子アニーリング vs 古典 FS） |
+
+### EDA（データ概観・1回） → `figures/eda/`
 | ファイル | 内容 |
 |----------|------|
 | `eda_target_distribution.png` | 含水率の分布（生 / 箱ひげ / log1p 後）。log1p 変換の動機 |
 | `eda_spectra_overview.png` | 平均スペクトル±std、サンプル波形、波長-含水率の相関 |
 
-### 戦略ごと（`<strategy>_` 接頭辞）
+### 戦略ごと（`<strategy>_` 接頭辞） → `figures/strategies/<strategy>/`
 | ファイル | 内容 |
 |----------|------|
 | `<strategy>_heatmap_metrics.png` | モデル×前処理の指標ヒートマップ（RMSE/R²/RPD） |
@@ -243,7 +253,7 @@ OOF（5-fold 交差検証）予測を元スケール（含水率 [%]）で評価
 | `<strategy>_pred_vs_actual.png` | 予測 vs 実測（ベスト単体＋ベストアンサンブル、1:1 線） |
 | `<strategy>_residuals.png` | 残差プロット（残差 vs 予測・残差ヒスト） |
 
-### 戦略横断（量子アニーリング比較＝レポートの核）
+### 戦略横断（量子アニーリング比較＝レポートの核） → `figures/comparison/`
 | ファイル | 内容 |
 |----------|------|
 | `compare_strategy_metrics.png` | 戦略 × 指標（RMSE/R²/RPD/RPIQ）のグループ棒 |
@@ -309,7 +319,15 @@ OOF（5-fold 交差検証）予測を元スケール（含水率 [%]）で評価
 - `sub_ensemble_stacking_ridge.csv` — スタッキング Ridge
 - `sub_ensemble_stacking_lasso.csv` — スタッキング Lasso
 - `sub_ensemble_weighted_avg.csv` — 加重平均
-- `sub_BEST.csv` — CV-RMSE が最も低い手法の予測（**これを提出**）
+- **`sub_BEST_1.csv` 〜 `sub_BEST_10.csv`** — 全候補（個別＋アンサンブル）を性能順に並べた
+  **上位10件**。`sub_BEST_1.csv` が最良（**これを提出**）、以降 2位・3位…
+- `sub_BEST_ranking.csv` — 上位10件の手法名と各指標（RMSE/R²/RPD/RPIQ…）の一覧表
+
+> 📌 **ランキング基準について**: 候補は **CV-RMSE 昇順**で並べます。**R²・RPD・RPIQ は
+> いずれも RMSE の単調関数**（RPD=std(y)/RMSE, RPIQ=IQR(y)/RMSE, R²=1−RMSE²/var(y)）
+> なので、**CV-RMSE 順は R²・RPD・RPIQ の順と完全に一致**します。つまり `sub_BEST_1.csv` は
+> これら3指標すべてで同時に最良です。`sub_BEST_ranking.csv` でその一致を確認できます。
+> （RMSE と順位が食い違いうるのは MAE / Bias / MAPE / MaxError のみ。）
 
 ---
 

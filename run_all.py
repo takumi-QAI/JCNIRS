@@ -113,6 +113,9 @@ def run_strategy(strategy_name,
         meta_ridge, meta_lasso, test_matrix,
         wa_test_pred, overall_best,
         ridge_cv, lasso_cv, wa_cv, config,
+        y_train=y_train,
+        ridge_oof=ridge_oof, lasso_oof=lasso_oof, wa_oof=wa_oof,
+        top_k=10,
     )
 
     # ---- ベスト手法の OOF と全指標 ----
@@ -136,20 +139,23 @@ def run_strategy(strategy_name,
     ens_rmse = {k: v for k, v in method_rmse.items() if k != "single"}
     best_ens = min(ens_rmse, key=ens_rmse.get)
 
-    # ---- 戦略別の図 ----
+    # ---- 戦略別の図 (figures/strategies/<strategy>/ に出力) ----
+    fig_subdir = f"strategies/{strategy_name}"
     try:
-        viz.plot_metric_heatmaps(df_results, config, prefix=f"{strategy_name}_")
-        viz.plot_model_metric_bars(df_results, config, prefix=f"{strategy_name}_")
+        viz.plot_metric_heatmaps(df_results, config, prefix=f"{strategy_name}_",
+                                 subdir=fig_subdir)
+        viz.plot_model_metric_bars(df_results, config, prefix=f"{strategy_name}_",
+                                   subdir=fig_subdir)
         viz.plot_pred_vs_actual(
             [(f"single: {overall_best['Model']}×{overall_best['Preprocessor']}",
               y_train, single_oof),
              (f"ensemble: {best_ens}", y_train, method_oof[best_ens])],
             config, fname=f"{strategy_name}_pred_vs_actual.png",
-            suptitle=f"{label}: OOF prediction vs actual",
+            suptitle=f"{label}: OOF prediction vs actual", subdir=fig_subdir,
         )
         viz.plot_residuals(
             f"{strategy_name} / {best_method}", y_train, best_oof,
-            config, fname=f"{strategy_name}_residuals.png",
+            config, fname=f"{strategy_name}_residuals.png", subdir=fig_subdir,
         )
     except Exception as e:    # 図の失敗で全体を止めない
         print(f"  ⚠ 戦略別の図生成に失敗: {e}")
