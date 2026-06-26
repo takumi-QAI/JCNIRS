@@ -15,4 +15,4 @@ RUN pip install --no-cache-dir amplify
 
 COPY . /app
 
-CMD ["python", "JCNIRS_feature_selection.py"]
+CMD ["python", "run_all.py"]
