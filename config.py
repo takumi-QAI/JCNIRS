@@ -53,9 +53,16 @@ ROBUST_MODELS = {
                                 "n_jobs": -1}},
     # XGBoost: honest GroupKFold 調整で max_depth=3(浅い)+多本数が最良。
     #   浅い木は「未知ボードへの汎化」に強い (深い木はボードを丸暗記しやすい)。
+    #   最適な深さは特徴量セットで変わる (冗長な MI 選択は d3、QUBO の低冗長選択は
+    #   d4 が良い) ため、d3/d4 の両方を置き各戦略の CV に best を選ばせる。
     "XGBoost":    {"type": "xgb",
                    "params": {"n_estimators": 800, "learning_rate": 0.05,
                               "max_depth": 3, "min_child_weight": 1,
+                              "subsample": 0.8, "colsample_bytree": 0.5,
+                              "reg_lambda": 2.0, "random_state": 42}},
+    "XGBoost_d4": {"type": "xgb",
+                   "params": {"n_estimators": 500, "learning_rate": 0.03,
+                              "max_depth": 4, "min_child_weight": 1,
                               "subsample": 0.8, "colsample_bytree": 0.5,
                               "reg_lambda": 2.0, "random_state": 42}},
     "LightGBM":   {"type": "lgbm",
