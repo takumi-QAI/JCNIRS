@@ -91,13 +91,19 @@ def load_data(config: dict):
     y_train = df_train[config["target_col"]].values.astype(np.float64)
 
     # ---- ボード単位グループ (GroupKFold 用、リーク防止) ----
-    if config.get("cv_grouped", True):
+    #   本データは 1 species = 1 ボード(乾燥曲線) であり、test は 6 ボードを
+    #   丸ごと held-out している。よって species number をそのままボード ID に
+    #   使うのが test 条件と一致する honest CV になる (既定)。
+    #   group_by_species=False のときだけ隣接スペクトル相関で推定する。
+    if not config.get("cv_grouped", True):
+        groups = None
+    elif config.get("group_by_species", True) and "species number" in df_train.columns:
+        groups = df_train["species number"].values.astype(int)
+    else:
         groups = compute_groups(
             df_train[config["id_col"]].values, X_train_spec,
             threshold=config.get("group_corr_threshold", 0.9999),
         )
-    else:
-        groups = None
 
     # ---- 表示 ----
     print(f"  Train           : {df_train.shape[0]} samples")

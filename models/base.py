@@ -207,3 +207,13 @@ if TORCH_AVAILABLE:
                     preds.append(out)
             out = torch.cat(preds).cpu().numpy().flatten()
             return out * self.y_std_ + self.y_mean_
+
+else:                                                  # pragma: no cover
+    # PyTorch 未インストール時のプレースホルダ。
+    #   各深層モデルは `from .base import TorchRegressorBase` を行うため、
+    #   名前自体は存在させてパッケージの import を成功させる。
+    #   実体化されると分かるようにエラーを出す (build_all_models は
+    #   REQUIRES_TORCH を見て事前にスキップするので通常ここには来ない)。
+    class TorchRegressorBase:
+        def __init__(self, *args, **kwargs):
+            raise ImportError("PyTorch が必要です: pip install torch")

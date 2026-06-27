@@ -135,6 +135,13 @@ CONFIG = {
     "random_state": 42,
     #   ボード単位 GroupKFold (リーク防止)。False で従来のランダム KFold。
     "cv_grouped":            True,
+    #   ボード ID の決め方:
+    #     True  = species number 列をそのままボード ID に使う (★推奨)
+    #             本データは 1 species = 1 ボード(乾燥曲線) で、test は 6 ボードを
+    #             丸ごと held-out している。species 単位 GroupKFold は test 条件と
+    #             完全に一致する honest CV。
+    #     False = 隣接スペクトル相関でボードを推定 (group_corr_threshold を使用)。
+    "group_by_species":      True,
     "group_corr_threshold":  0.9999,  # 隣接スペクトル相関がこれ未満で別ボード
 
     # ── 目的変数の変換 / 予測の後処理 ─────────────────────
@@ -144,6 +151,15 @@ CONFIG = {
     #   含水率は非負・実用上 ~300% が上限 → 暴走予測を物理範囲にクリップ
     #   (リーク無しでも不安定モデルが out-of-range を出すのを防ぐ安全網)
     "clip_predictions": [0.0, 320.0],
+
+    # ── 乾燥曲線の後処理 (本データ固有の構造を利用) ──────────
+    #   各ボード(= species)はスキャン順(sample number)に含水率が単調非増加で
+    #   変化する乾燥時系列。per-scan 予測にこの制約を課す(保序回帰)と、スペクトル
+    #   ノイズが系列方向に平均化され誤差が下がる (honest LOBO で 54→34)。
+    #   CV(OOF) とテスト予測の双方に同一処理を適用するため CV は honest なまま。
+    #   時系列でないデータに流用する場合は False にすること。
+    "postprocess_board_smooth": True,
+    "postprocess_method":       "isotonic",  # "isotonic" | "poly2" | "poly3"
 
     # ── 評価指標 ──────────────────────────────────────────
     #   計算・表示する指標 (詳細は metrics.py / docs/REPORT_GUIDE.md)

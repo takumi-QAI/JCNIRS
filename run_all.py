@@ -71,7 +71,12 @@ class _Tee:
 
     def write(self, data):
         for s in self.streams:
-            s.write(data)
+            try:
+                s.write(data)
+            except UnicodeEncodeError:
+                # コンソールが cp932 等で一部文字を出せない場合の保険
+                enc = getattr(s, "encoding", None) or "ascii"
+                s.write(data.encode(enc, errors="replace").decode(enc))
             s.flush()
 
     def flush(self):
@@ -97,7 +102,8 @@ def setup_logging(config):
 def run_strategy(strategy_name,
                  X_train_spec, X_test_spec,
                  X_train_cat, X_test_cat,
-                 y_train, df_test, config_fs, groups=None):
+                 y_train, df_test, config_fs, groups=None,
+                 train_sn=None, test_sn=None, test_groups=None):
     """1 つの特徴量選択戦略でフルパイプラインを実行する。
 
     Returns
@@ -129,6 +135,7 @@ def run_strategy(strategy_name,
         X_sel_train, X_sel_test,
         X_train_cat, X_test_cat,
         y_train, models, config, groups=groups,
+        train_sn=train_sn, test_sn=test_sn, test_groups=test_groups,
     )
 
     best_per_model, overall_best = get_best_models(df_results)
@@ -136,12 +143,13 @@ def run_strategy(strategy_name,
     (meta_ridge, meta_lasso, test_matrix, ridge_cv, lasso_cv,
      _, ridge_oof, lasso_oof) = run_stacking(
         df_results, all_oof_train, all_test_preds, y_train, config,
-        groups=groups,
+        groups=groups, train_sn=train_sn,
     )
 
     opt_w, wa_cv, wa_test_pred, wa_oof = run_weighted_average(
         df_results, all_oof_train, all_test_preds, y_train, config,
-        groups=groups,
+        groups=groups, train_sn=train_sn, test_sn=test_sn,
+        test_groups=test_groups,
     )
 
     create_all_submissions(
@@ -152,6 +160,7 @@ def run_strategy(strategy_name,
         y_train=y_train,
         ridge_oof=ridge_oof, lasso_oof=lasso_oof, wa_oof=wa_oof,
         top_k=10,
+        test_sn=test_sn, test_groups=test_groups,
     )
 
     # ---- ベスト手法の OOF と全指標 ----
@@ -288,6 +297,14 @@ def main():
      X_train_cat, X_test_cat,
      y_train, wavelengths, groups) = load_data(CONFIG)
 
+    # 乾燥曲線の後処理 (ボード単位の単調平滑化) 用の情報
+    #   train_sn / test_sn  : スキャン順 (sample number)
+    #   test_groups         : テスト各行のボード ID (= species number)
+    train_sn = df_train[CONFIG["id_col"]].values
+    test_sn  = df_test[CONFIG["id_col"]].values
+    test_groups = (df_test["species number"].values.astype(int)
+                   if "species number" in df_test.columns else None)
+
     # ---- EDA 図 ----
     if CONFIG.get("eda_figures", True):
         _header("EDA 図の生成")
@@ -318,6 +335,7 @@ def main():
             X_train_spec, X_test_spec,
             X_train_cat, X_test_cat,
             y_train, df_test, CONFIG_FS, groups=groups,
+            train_sn=train_sn, test_sn=test_sn, test_groups=test_groups,
         )
         results.append(summary)
 

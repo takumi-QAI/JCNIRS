@@ -32,6 +32,22 @@ from data import _header
 from preprocessing import SpectralPreprocessor
 from metrics import compute_metrics, cv_column, DEFAULT_METRICS
 from target import forward_transform, inverse_transform, clip_predictions
+from postprocess import smooth_by_board
+
+
+# ============================================================
+# 乾燥曲線の後処理 (ボード単位の単調平滑化) ヘルパー
+# ============================================================
+def _smooth(pred, sn, board_ids, config):
+    """config が有効かつ sn/board_ids が揃っていればボード単位で平滑化する。"""
+    if (config.get("postprocess_board_smooth", False)
+            and sn is not None and board_ids is not None):
+        return smooth_by_board(
+            pred, sn, board_ids,
+            method=config.get("postprocess_method", "isotonic"),
+            clip=config.get("clip_predictions"),
+        )
+    return pred
 
 
 # ============================================================
@@ -85,7 +101,8 @@ def verify_preprocessors(X_train_spec: np.ndarray, config: dict):
 # ============================================================
 def run_full_evaluation(X_train_spec, X_test_spec,
                         X_train_cat, X_test_cat,
-                        y_train, models, config, groups=None):
+                        y_train, models, config, groups=None,
+                        train_sn=None, test_sn=None, test_groups=None):
     """全 前処理×モデル の 5-Fold CV を実行し、OOF 予測とテスト予測を収集する。
 
     groups を渡すとボード単位 GroupKFold (リーク防止) になる。
@@ -156,8 +173,14 @@ def run_full_evaluation(X_train_spec, X_test_spec,
                 oof[val_idx] = pred_va
                 test_folds[:, fi] = pred_te
 
+            # 乾燥曲線の後処理 (ボード単位の単調平滑化)。
+            #   OOF とテストに同一処理を適用 → CV は honest なまま改善を反映。
+            oof = _smooth(oof, train_sn, groups, config)
+            test_mean = _smooth(test_folds.mean(axis=1), test_sn,
+                                test_groups, config)
+
             all_oof_train[combo_key]  = oof
-            all_test_preds[combo_key] = test_folds.mean(axis=1)
+            all_test_preds[combo_key] = test_mean
 
             # 全指標を元スケールで計算
             scores = compute_metrics(y_train, oof, metric_keys)
@@ -248,7 +271,7 @@ def visualize_results(df_results: pd.DataFrame, config: dict,
 # Step 5: スタッキング (Ridge / Lasso メタ学習器)
 # ============================================================
 def run_stacking(df_results, all_oof_train, all_test_preds,
-                 y_train, config, groups=None):
+                 y_train, config, groups=None, train_sn=None):
     """各モデルの最良前処理を使ってスタッキングを行う。
 
     Returns
@@ -286,6 +309,7 @@ def run_stacking(df_results, all_oof_train, all_test_preds,
         m.fit(oof_matrix[tr_idx], y_train[tr_idx])
         ridge_oof[val_idx] = m.predict(oof_matrix[val_idx])
     ridge_oof = clip_predictions(ridge_oof, clip)
+    ridge_oof = _smooth(ridge_oof, train_sn, groups, config)
     ridge_cv = np.sqrt(mean_squared_error(y_train, ridge_oof))
 
     print(f"\n  [Stacking Ridge]  CV-RMSE = {ridge_cv:.4f}")
@@ -308,6 +332,7 @@ def run_stacking(df_results, all_oof_train, all_test_preds,
         m.fit(oof_matrix[tr_idx], y_train[tr_idx])
         lasso_oof[val_idx] = m.predict(oof_matrix[val_idx])
     lasso_oof = clip_predictions(lasso_oof, clip)
+    lasso_oof = _smooth(lasso_oof, train_sn, groups, config)
     lasso_cv = np.sqrt(mean_squared_error(y_train, lasso_oof))
 
     print(f"\n  [Stacking Lasso]  CV-RMSE = {lasso_cv:.4f}")
@@ -322,7 +347,8 @@ def run_stacking(df_results, all_oof_train, all_test_preds,
 # Step 6: 加重平均アンサンブル
 # ============================================================
 def run_weighted_average(df_results, all_oof_train, all_test_preds,
-                         y_train, config, groups=None):
+                         y_train, config, groups=None,
+                         train_sn=None, test_sn=None, test_groups=None):
     """最適重みによる加重平均アンサンブル。
 
     Returns
@@ -369,6 +395,7 @@ def run_weighted_average(df_results, all_oof_train, all_test_preds,
         )
         wa_oof[val_idx] = oof_matrix[val_idx] @ cv_res.x
     wa_oof = clip_predictions(wa_oof, clip)
+    wa_oof = _smooth(wa_oof, train_sn, groups, config)
     wa_cv = np.sqrt(mean_squared_error(y_train, wa_oof))
 
     print("\n  最適重み:")
@@ -377,6 +404,7 @@ def run_weighted_average(df_results, all_oof_train, all_test_preds,
     print(f"\n  [Weighted Avg]  CV-RMSE = {wa_cv:.4f}")
 
     wa_test_pred = clip_predictions(test_matrix @ opt_w, clip)
+    wa_test_pred = _smooth(wa_test_pred, test_sn, test_groups, config)
     return opt_w, wa_cv, wa_test_pred, wa_oof
 
 
@@ -389,6 +417,7 @@ def create_all_submissions(
     wa_test_pred, overall_best,
     ridge_cv, lasso_cv, wa_cv, config,
     y_train=None, ridge_oof=None, lasso_oof=None, wa_oof=None, top_k=10,
+    test_sn=None, test_groups=None,
 ):
     """全モデル×前処理の個別予測 + アンサンブル予測を CSV に出力する。
 
@@ -428,8 +457,12 @@ def create_all_submissions(
     # ---- アンサンブル ----
     print("\n  --- アンサンブル ---")
     clip = config.get("clip_predictions")
-    ridge_pred = clip_predictions(meta_ridge.predict(test_matrix), clip)
-    lasso_pred = clip_predictions(meta_lasso.predict(test_matrix), clip)
+    ridge_pred = _smooth(
+        clip_predictions(meta_ridge.predict(test_matrix), clip),
+        test_sn, test_groups, config)
+    lasso_pred = _smooth(
+        clip_predictions(meta_lasso.predict(test_matrix), clip),
+        test_sn, test_groups, config)
 
     _save("sub_ensemble_stacking_ridge.csv", ridge_pred)
     _save("sub_ensemble_stacking_lasso.csv", lasso_pred)

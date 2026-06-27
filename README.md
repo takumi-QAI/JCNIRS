@@ -272,7 +272,8 @@ OOF（5-fold 交差検証）予測を元スケール（含水率 [%]）で評価
 
 | 工夫 | 内容 | 設定 |
 |------|------|------|
-| **★ ボード単位 GroupKFold** | 本データは同一ボードの繰り返し測定を含むため、ランダム KFold はリークし CV が極端に楽観的(R²≈0.997)になる。sample number 順の隣接スペクトル相関でボードを推定し、同一ボードを同じ fold に固める honest CV にすることで、汎化するモデルだけが選ばれる | `CONFIG["cv_grouped"]=True`, `group_corr_threshold` |
+| **★ ボード単位 GroupKFold (species)** | 本データは **19 枚の板(= species number)をそれぞれ乾燥させながら連続スキャンした時系列**で、**test は 6 枚の板を丸ごと held-out** している。`species number` をボード ID として GroupKFold すると、test 条件と完全に一致する honest CV になる（同一ボードが train/val に跨らない）。ランダム KFold は同一ボードがリークし CV が極端に楽観的(R²≈0.997)になる | `CONFIG["cv_grouped"]=True`, `CONFIG["group_by_species"]=True` |
+| **★ 乾燥曲線の後処理 (単調平滑化)** | 各ボードはスキャン順(sample number)に含水率が**単調非増加**で変化する乾燥曲線（実測で 3 次多項式 R²≈0.999）。per-scan 予測にこの物理制約を保序回帰で課すと、スペクトルノイズが系列方向に平均化され誤差が下がる（honest LOBO で overall 54→34、内挿ボードでは全件改善 or 同等で悪化なし）。CV(OOF)とテストに同一適用するため CV は honest なまま | `CONFIG["postprocess_board_smooth"]=True`, `postprocess_method` |
 | **頑健モデルを既定化** | 1322行・実質~150ボードしか無く深層モデルは過学習。既定は PLS/Ridge/SVR/kNN/RF/XGB/LightGBM 等の頑健モデル（正則化強め）。深層モデルはレポート用に `DEEP_MODELS` として温存 | `CONFIG["models"]=dict(ROBUST_MODELS)` |
 | **浅いXGBoost** | honest CV 調整で `max_depth=3`＋多本数(800)が最良。浅い木は未知ボードへの汎化に強い（深い木はボードを丸暗記）。例: filter で 15.18→13.59 | `ROBUST_MODELS["XGBoost"]` |
 | **目的変数の log1p 変換** | 右裾の重い含水率分布を圧縮し学習を安定化。学習は log1p 空間、評価は逆変換して元スケール | `CONFIG["target_transform"]="log1p"` |
@@ -282,8 +283,19 @@ OOF（5-fold 交差検証）予測を元スケール（含水率 [%]）で評価
 
 > 🔬 **なぜ GroupKFold が決定的か**: ランダム KFold では同一ボードの繰り返しスキャンが
 > train/val 両方に入り「丸暗記」が起きる。その結果、リーク CV が選ぶ「ベスト」は
-> テストで暴走（例: filter 戦略の予測が全件~1900、Public RMSE 1884）。GroupKFold に
-> すると CV-RMSE がリーダーボード実測(~14)と一致し、選ばれる submission が安定する。
+> テストで暴走（例: filter 戦略の予測が全件~1900、Public RMSE 1884）。**species 単位**の
+> GroupKFold にすると「未知の板を丸ごと当てる」本当の難易度で評価でき、汎化するモデル
+> だけが選ばれる。
+>
+> ⚠ **honest CV の絶対値について**: train の 13 板には含水率 ~300% の極端な板も含むため、
+> 5-fold で極端な板が val に入る fold は誤差が大きく、pooled CV-RMSE は **保守的(高め)** に
+> 出る。test の 6 板はすべて train の含水率範囲内（内挿）なので、実際の Public は CV より
+> 良く出る傾向。**CV はモデル選択(ランキング)の honest 化が目的**で、絶対値の一致は二次的。
+>
+> 🏁 **リーダーボード上位(1桁)について**: 各 test 板のラベルは滑らかな乾燥曲線＝実質
+> 数自由度しか持たないため、提出の RMSE 返り値から少数の構造化提出でラベルを逆算する
+> **リーダーボード・プロービング**が可能（上位の提出回数 500+ がその兆候）。これは public
+> への過適合で private 分割があれば崩れやすい。本リポジトリは honest に汎化する正攻法を採る。
 
 ---
 
@@ -307,9 +319,12 @@ OOF（5-fold 交差検証）予測を元スケール（含水率 [%]）で評価
 | `CONFIG["preprocessors"]` | 使用する前処理 | 9種 |
 | `CONFIG["n_splits"]` | 交差検証の分割数 | 5 |
 | `CONFIG["cv_grouped"]` | ボード単位 GroupKFold（リーク防止） | `True` |
-| `CONFIG["group_corr_threshold"]` | ボード境界の隣接相関しきい値 | `0.9999` |
+| `CONFIG["group_by_species"]` | ボード ID に species number を使う（True 推奨） | `True` |
+| `CONFIG["group_corr_threshold"]` | （group_by_species=False 時）境界の隣接相関しきい値 | `0.9999` |
 | `CONFIG["target_transform"]` | 目的変数の変換 | `"log1p"` |
 | `CONFIG["clip_predictions"]` | 予測のクリップ範囲 | `[0.0, 320.0]` |
+| `CONFIG["postprocess_board_smooth"]` | 乾燥曲線の単調平滑化（時系列構造を利用） | `True` |
+| `CONFIG["postprocess_method"]` | 平滑化手法（isotonic / poly2 / poly3） | `"isotonic"` |
 | `CONFIG["metrics"]` | 計算・表示する指標 | 8指標 |
 | `CONFIG["figure_dir"]` | 図の出力フォルダ | `"figures"` |
 | `CONFIG["eda_figures"]` | EDA 図を出すか | `True` |
