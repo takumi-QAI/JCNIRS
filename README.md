@@ -274,6 +274,7 @@ OOF（5-fold 交差検証）予測を元スケール（含水率 [%]）で評価
 |------|------|------|
 | **★ ボード単位 GroupKFold** | 本データは同一ボードの繰り返し測定を含むため、ランダム KFold はリークし CV が極端に楽観的(R²≈0.997)になる。sample number 順の隣接スペクトル相関でボードを推定し、同一ボードを同じ fold に固める honest CV にすることで、汎化するモデルだけが選ばれる | `CONFIG["cv_grouped"]=True`, `group_corr_threshold` |
 | **頑健モデルを既定化** | 1322行・実質~150ボードしか無く深層モデルは過学習。既定は PLS/Ridge/SVR/kNN/RF/XGB/LightGBM 等の頑健モデル（正則化強め）。深層モデルはレポート用に `DEEP_MODELS` として温存 | `CONFIG["models"]=dict(ROBUST_MODELS)` |
+| **浅いXGBoost** | honest CV 調整で `max_depth=3`＋多本数(800)が最良。浅い木は未知ボードへの汎化に強い（深い木はボードを丸暗記）。例: filter で 15.18→13.59 | `ROBUST_MODELS["XGBoost"]` |
 | **目的変数の log1p 変換** | 右裾の重い含水率分布を圧縮し学習を安定化。学習は log1p 空間、評価は逆変換して元スケール | `CONFIG["target_transform"]="log1p"` |
 | **予測の物理クリップ** | 含水率は非負・実用上~300%上限。暴走予測を範囲内に抑える安全網（リーク修正前は予測が1900に暴走しPublic 1884になった） | `CONFIG["clip_predictions"]=[0.0, 320.0]` |
 | **深層モデルの入力標準化＋早期終了** | 前処理に依らず標準化し、検証損失でベスト重みを復元して過学習抑制（train部分の統計で fit、リーク防止） | `models/base.py` / `models/gan.py` |
@@ -312,6 +313,7 @@ OOF（5-fold 交差検証）予測を元スケール（含水率 [%]）で評価
 | `CONFIG["metrics"]` | 計算・表示する指標 | 8指標 |
 | `CONFIG["figure_dir"]` | 図の出力フォルダ | `"figures"` |
 | `CONFIG["eda_figures"]` | EDA 図を出すか | `True` |
+| `CONFIG["log_dir"]` | 実行ログの出力フォルダ（画面と同時に保存） | `"logs"` |
 | `CONFIG_FS["strategies"]` | 実行する特徴量選択戦略 | 5戦略 |
 | `CONFIG_FS["amplify"]["token"]` | Amplify トークン | `.env` の `AMPLIFY_TOKEN` |
 

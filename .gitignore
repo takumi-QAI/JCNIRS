@@ -12,6 +12,8 @@ build/
 submissions_*/
 submissions/
 *.png
+figures/
+logs/
 
 # データ（大きいファイルはGitに含めない場合はコメント解除）
 # train.csv

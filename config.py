@@ -51,14 +51,18 @@ ROBUST_MODELS = {
     "RandomForest": {"type": "rf",
                      "params": {"n_estimators": 300, "random_state": 42,
                                 "n_jobs": -1}},
+    # XGBoost: honest GroupKFold 調整で max_depth=3(浅い)+多本数が最良。
+    #   浅い木は「未知ボードへの汎化」に強い (深い木はボードを丸暗記しやすい)。
     "XGBoost":    {"type": "xgb",
-                   "params": {"n_estimators": 400, "learning_rate": 0.03,
-                              "max_depth": 4, "subsample": 0.8,
-                              "colsample_bytree": 0.5, "random_state": 42}},
+                   "params": {"n_estimators": 800, "learning_rate": 0.05,
+                              "max_depth": 3, "min_child_weight": 1,
+                              "subsample": 0.8, "colsample_bytree": 0.5,
+                              "reg_lambda": 2.0, "random_state": 42}},
     "LightGBM":   {"type": "lgbm",
-                   "params": {"n_estimators": 400, "learning_rate": 0.03,
-                              "num_leaves": 31, "subsample": 0.8,
-                              "colsample_bytree": 0.5, "random_state": 42,
+                   "params": {"n_estimators": 800, "learning_rate": 0.03,
+                              "num_leaves": 15, "subsample": 0.8,
+                              "colsample_bytree": 0.5, "min_child_samples": 20,
+                              "reg_lambda": 2.0, "random_state": 42,
                               "verbose": -1}},
 }
 
@@ -173,6 +177,9 @@ CONFIG = {
     "figure_dpi":   150,
     "figure_dir":   "figures",   # 図の出力フォルダ (PNG)
     "eda_figures":  True,        # 開始時に EDA 図 (含水率分布・スペクトル概観) を出力
+
+    # ── ログ ──────────────────────────────────────────────
+    "log_dir":      "logs",      # 実行ログ (run_<日時>.log) の出力フォルダ
 }
 
 # ── 深層モデルの早期終了について ───────────────────────────

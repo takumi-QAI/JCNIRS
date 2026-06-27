@@ -31,8 +31,11 @@ config.py の CONFIG["models"] / CONFIG["preprocessors"] / CONFIG_FS["strategies
 を絞り込んでください (該当行をコメントアウトするだけ)。
 """
 
+import os
+import sys
 import copy
 import time
+import datetime
 import warnings
 
 import numpy as np
@@ -55,6 +58,37 @@ warnings.filterwarnings("ignore")
 
 # 古典的手法 + 量子アニーリング手法を統合した戦略ディスパッチ
 SELECTORS = {**CLASSICAL_SELECTORS, "amplify": select_amplify}
+
+
+# ============================================================
+# ログのファイル出力 (コンソール + logs/run_<日時>.log)
+# ============================================================
+class _Tee:
+    """複数ストリームへ同時書き込みする (画面とログファイル)。"""
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for s in self.streams:
+            s.write(data)
+            s.flush()
+
+    def flush(self):
+        for s in self.streams:
+            s.flush()
+
+
+def setup_logging(config):
+    """標準出力/標準エラーを logs/run_<日時>.log にも複製する。"""
+    log_dir = os.path.join(config["data_dir"], config.get("log_dir", "logs"))
+    os.makedirs(log_dir, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = os.path.join(log_dir, f"run_{ts}.log")
+    f = open(path, "a", encoding="utf-8")
+    sys.stdout = _Tee(sys.__stdout__, f)
+    sys.stderr = _Tee(sys.__stderr__, f)
+    return path
 
 
 # ============================================================
@@ -243,6 +277,10 @@ def visualize_feature_selection(results, wavelengths, X_train_spec, y_train):
 # ============================================================
 def main():
     """全戦略を順に実行し、比較結果を出力する。"""
+
+    # ---- ログのファイル出力を開始 ----
+    log_path = setup_logging(CONFIG)
+    print(f"  ログ出力: {os.path.relpath(log_path, CONFIG['data_dir'])}")
 
     # ---- データ読み込み (全戦略で共通) ----
     (df_train, df_test,
