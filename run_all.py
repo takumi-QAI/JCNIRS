@@ -63,7 +63,7 @@ SELECTORS = {**CLASSICAL_SELECTORS, "amplify": select_amplify}
 def run_strategy(strategy_name,
                  X_train_spec, X_test_spec,
                  X_train_cat, X_test_cat,
-                 y_train, df_test, config_fs):
+                 y_train, df_test, config_fs, groups=None):
     """1 つの特徴量選択戦略でフルパイプラインを実行する。
 
     Returns
@@ -94,7 +94,7 @@ def run_strategy(strategy_name,
     df_results, all_oof_train, all_test_preds = run_full_evaluation(
         X_sel_train, X_sel_test,
         X_train_cat, X_test_cat,
-        y_train, models, config,
+        y_train, models, config, groups=groups,
     )
 
     best_per_model, overall_best = get_best_models(df_results)
@@ -102,10 +102,12 @@ def run_strategy(strategy_name,
     (meta_ridge, meta_lasso, test_matrix, ridge_cv, lasso_cv,
      _, ridge_oof, lasso_oof) = run_stacking(
         df_results, all_oof_train, all_test_preds, y_train, config,
+        groups=groups,
     )
 
     opt_w, wa_cv, wa_test_pred, wa_oof = run_weighted_average(
         df_results, all_oof_train, all_test_preds, y_train, config,
+        groups=groups,
     )
 
     create_all_submissions(
@@ -246,7 +248,7 @@ def main():
     (df_train, df_test,
      X_train_spec, X_test_spec,
      X_train_cat, X_test_cat,
-     y_train, wavelengths) = load_data(CONFIG)
+     y_train, wavelengths, groups) = load_data(CONFIG)
 
     # ---- EDA 図 ----
     if CONFIG.get("eda_figures", True):
@@ -277,7 +279,7 @@ def main():
             strategy,
             X_train_spec, X_test_spec,
             X_train_cat, X_test_cat,
-            y_train, df_test, CONFIG_FS,
+            y_train, df_test, CONFIG_FS, groups=groups,
         )
         results.append(summary)
 

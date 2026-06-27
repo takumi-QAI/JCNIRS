@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 from sklearn.linear_model import Ridge, Lasso
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, GroupKFold
 from sklearn.metrics import mean_squared_error
 from scipy.optimize import minimize
 
@@ -32,6 +32,25 @@ from data import _header
 from preprocessing import SpectralPreprocessor
 from metrics import compute_metrics, cv_column, DEFAULT_METRICS
 from target import forward_transform, inverse_transform, clip_predictions
+
+
+# ============================================================
+# 交差検証の分割 (ボード単位 GroupKFold or ランダム KFold)
+# ============================================================
+def make_splits(config, n_samples, groups=None):
+    """fold の (train_idx, val_idx) リストを返す。
+
+    config["cv_grouped"] が True かつ groups があればボード単位 GroupKFold。
+    同一ボードが train/val に跨らないため honest な CV になる。
+    """
+    n_splits = config["n_splits"]
+    if config.get("cv_grouped", True) and groups is not None:
+        gkf = GroupKFold(n_splits=n_splits)
+        dummy = np.zeros(n_samples)
+        return list(gkf.split(dummy, dummy, groups))
+    kf = KFold(n_splits=n_splits, shuffle=True,
+               random_state=config["random_state"])
+    return list(kf.split(np.zeros(n_samples)))
 
 
 # ============================================================
@@ -66,8 +85,10 @@ def verify_preprocessors(X_train_spec: np.ndarray, config: dict):
 # ============================================================
 def run_full_evaluation(X_train_spec, X_test_spec,
                         X_train_cat, X_test_cat,
-                        y_train, models, config):
+                        y_train, models, config, groups=None):
     """全 前処理×モデル の 5-Fold CV を実行し、OOF 予測とテスト予測を収集する。
+
+    groups を渡すとボード単位 GroupKFold (リーク防止) になる。
 
     Returns
     -------
@@ -78,10 +99,10 @@ def run_full_evaluation(X_train_spec, X_test_spec,
     """
     _header("Step 3: 交差検証 (全組み合わせ)")
 
-    kf = KFold(
-        n_splits=config["n_splits"], shuffle=True,
-        random_state=config["random_state"],
-    )
+    splits = make_splits(config, X_train_spec.shape[0], groups)
+    if config.get("cv_grouped", True) and groups is not None:
+        print(f"  CV: ボード単位 GroupKFold ({config['n_splits']} fold, "
+              f"{int(groups.max()) + 1} ボード)")
     preprocessors = config["preprocessors"]
     metric_keys = config.get("metrics", DEFAULT_METRICS)
     tkind = config.get("target_transform", "none")
@@ -109,7 +130,7 @@ def run_full_evaluation(X_train_spec, X_test_spec,
             oof = np.zeros(n_train)
             test_folds = np.zeros((n_test, config["n_splits"]))
 
-            for fi, (tr_idx, val_idx) in enumerate(kf.split(X_train_spec)):
+            for fi, (tr_idx, val_idx) in enumerate(splits):
                 # 前処理 (スペクトルのみに適用)
                 prep = SpectralPreprocessor(prep_name, config)
                 Xtr_s = prep.fit(X_train_spec[tr_idx]).transform(
@@ -227,7 +248,7 @@ def visualize_results(df_results: pd.DataFrame, config: dict,
 # Step 5: スタッキング (Ridge / Lasso メタ学習器)
 # ============================================================
 def run_stacking(df_results, all_oof_train, all_test_preds,
-                 y_train, config):
+                 y_train, config, groups=None):
     """各モデルの最良前処理を使ってスタッキングを行う。
 
     Returns
@@ -240,10 +261,7 @@ def run_stacking(df_results, all_oof_train, all_test_preds,
     """
     _header("Step 5: スタッキング (Ridge / Lasso)")
 
-    kf = KFold(
-        n_splits=config["n_splits"], shuffle=True,
-        random_state=config["random_state"],
-    )
+    splits = make_splits(config, len(y_train), groups)
     clip = config.get("clip_predictions")
 
     best_per_model, _ = get_best_models(df_results)
@@ -263,7 +281,7 @@ def run_stacking(df_results, all_oof_train, all_test_preds,
     meta_ridge.fit(oof_matrix, y_train)
 
     ridge_oof = np.zeros(n_train)
-    for tr_idx, val_idx in kf.split(oof_matrix):
+    for tr_idx, val_idx in splits:
         m = Ridge(alpha=config["meta_ridge_alpha"])
         m.fit(oof_matrix[tr_idx], y_train[tr_idx])
         ridge_oof[val_idx] = m.predict(oof_matrix[val_idx])
@@ -282,7 +300,7 @@ def run_stacking(df_results, all_oof_train, all_test_preds,
     meta_lasso.fit(oof_matrix, y_train)
 
     lasso_oof = np.zeros(n_train)
-    for tr_idx, val_idx in kf.split(oof_matrix):
+    for tr_idx, val_idx in splits:
         m = Lasso(
             alpha=config["meta_lasso_alpha"],
             max_iter=config["meta_lasso_max_iter"],
@@ -304,7 +322,7 @@ def run_stacking(df_results, all_oof_train, all_test_preds,
 # Step 6: 加重平均アンサンブル
 # ============================================================
 def run_weighted_average(df_results, all_oof_train, all_test_preds,
-                         y_train, config):
+                         y_train, config, groups=None):
     """最適重みによる加重平均アンサンブル。
 
     Returns
@@ -316,10 +334,7 @@ def run_weighted_average(df_results, all_oof_train, all_test_preds,
     """
     _header("Step 6: 加重平均アンサンブル")
 
-    kf = KFold(
-        n_splits=config["n_splits"], shuffle=True,
-        random_state=config["random_state"],
-    )
+    splits = make_splits(config, len(y_train), groups)
     clip = config.get("clip_predictions")
 
     best_per_model, _ = get_best_models(df_results)
@@ -346,7 +361,7 @@ def run_weighted_average(df_results, all_oof_train, all_test_preds,
 
     # CV 評価
     wa_oof = np.zeros(n_train)
-    for tr_idx, val_idx in kf.split(oof_matrix):
+    for tr_idx, val_idx in splits:
         cv_res = minimize(
             _wa_rmse, init_w,
             args=(oof_matrix[tr_idx], y_train[tr_idx]),

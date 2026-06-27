@@ -7,13 +7,19 @@ JCNIRS 設定 (config.py)
 - CONFIG_FS    : 特徴量選択 (none / filter / wrapper / embedded / amplify)
 - STRATEGY_LABELS : 特徴量選択戦略の日本語ラベル
 
+★ 重要: 交差検証は「ボード単位の GroupKFold」が既定です
+--------------------------------------------------------
+本データは同一ボード(木材)を乾燥させながら複数回スキャンした「繰り返し測定」を
+含みます。ランダム KFold では同じボードが train/val 両方に入りリークし、CV が
+極端に楽観的(R²≈0.997)になります。そこで sample number 順の隣接スペクトル相関で
+ボードを推定し、GroupKFold で同一ボードを同じ fold に固める honest CV を行います
+(CONFIG["cv_grouped"] = True)。
+
 速度を優先したい場合
 --------------------
 - CONFIG["models"]        : 不要なモデルをコメントアウト
 - CONFIG["preprocessors"] : 不要な前処理をコメントアウト
 - CONFIG_FS["strategies"] : 不要な特徴量選択をコメントアウト
-既定では「全16モデル × 全8前処理 × 全5特徴量選択 × 5-fold CV」を実行するため、
-CPU 環境では数時間規模になります (深層モデルは GPU 推奨)。
 """
 
 import os
@@ -24,6 +30,75 @@ try:
     load_dotenv()
 except ImportError:
     pass
+
+
+# ============================================================
+# モデル定義 (頑健モデル / 深層モデルを分けて管理)
+# ============================================================
+# 既定 = leaderboard 向けの頑健・高速モデル。
+# honest(GroupKFold) CV で汎化するよう正則化を強めにしてある。
+ROBUST_MODELS = {
+    "PLS":        {"type": "pls",  "params": {"n_components": 12}},
+    "PCR":        {"type": "pcr",  "params": {"n_components": 20}},
+    "Ridge":      {"type": "ridge", "params": {"alpha": 100.0}},
+    "Lasso":      {"type": "lasso", "params": {"alpha": 0.05, "max_iter": 10000}},
+    "ElasticNet": {"type": "elasticnet",
+                   "params": {"alpha": 0.05, "l1_ratio": 0.5, "max_iter": 10000}},
+    "SVR":        {"type": "svr",
+                   "params": {"kernel": "rbf", "C": 10.0, "epsilon": 0.05}},
+    "kNN":        {"type": "knn",
+                   "params": {"n_neighbors": 3, "weights": "distance"}},
+    "RandomForest": {"type": "rf",
+                     "params": {"n_estimators": 300, "random_state": 42,
+                                "n_jobs": -1}},
+    "XGBoost":    {"type": "xgb",
+                   "params": {"n_estimators": 400, "learning_rate": 0.03,
+                              "max_depth": 4, "subsample": 0.8,
+                              "colsample_bytree": 0.5, "random_state": 42}},
+    "LightGBM":   {"type": "lgbm",
+                   "params": {"n_estimators": 400, "learning_rate": 0.03,
+                              "num_leaves": 31, "subsample": 0.8,
+                              "colsample_bytree": 0.5, "random_state": 42,
+                              "verbose": -1}},
+}
+
+# 深層モデル (研究レポートのモデル比較用)。
+#   ※ 1322 行・実質 150 ボードしか無いため honest CV では過学習しやすく、
+#     学習も低速。leaderboard 目的では既定で無効にしている。
+#   モデル比較レポートを作るときは CONFIG["models"] を
+#     {**ROBUST_MODELS, **DEEP_MODELS} に変更して有効化する。
+DEEP_MODELS = {
+    "1D-CNN": {"type": "cnn1d",
+               "params": {"epochs": 80, "batch_size": 64, "lr": 1e-3,
+                          "weight_decay": 1e-4}},
+    "AE": {"type": "ae",
+           "params": {"epochs": 120, "batch_size": 64, "lr": 1e-3,
+                      "weight_decay": 1e-5, "latent_dim": 32,
+                      "hidden_dims": [256, 128], "recon_weight": 1.0,
+                      "reg_weight": 1.0}},
+    "SAE": {"type": "sae",
+            "params": {"epochs": 120, "batch_size": 64, "lr": 1e-3,
+                       "weight_decay": 1e-5, "latent_dim": 64,
+                       "hidden_dims": [256, 128], "recon_weight": 1.0,
+                       "reg_weight": 1.0, "sparsity_weight": 1e-3}},
+    "VAE": {"type": "vae",
+            "params": {"epochs": 120, "batch_size": 64, "lr": 1e-3,
+                       "weight_decay": 1e-5, "latent_dim": 32,
+                       "hidden_dims": [256, 128], "recon_weight": 1.0,
+                       "reg_weight": 1.0, "kl_weight": 1e-3}},
+    "GAN": {"type": "gan",
+            "params": {"epochs": 150, "batch_size": 64, "lr": 2e-4,
+                       "weight_decay": 0.0, "hidden_dims": [256, 128],
+                       "adv_weight": 0.1, "reg_weight": 1.0}},
+    "DeepSpectra": {"type": "deepspectra",
+                    "params": {"epochs": 100, "batch_size": 64, "lr": 1e-3,
+                               "weight_decay": 1e-4}},
+    "Transformer": {"type": "transformer",
+                    "params": {"epochs": 100, "batch_size": 64, "lr": 5e-4,
+                               "weight_decay": 1e-4, "patch_size": 32,
+                               "d_model": 64, "n_heads": 4, "n_layers": 2,
+                               "dropout": 0.1}},
+}
 
 
 # ============================================================
@@ -47,12 +122,17 @@ CONFIG = {
     # ── 交差検証 ──────────────────────────────────────────
     "n_splits":     5,
     "random_state": 42,
+    #   ボード単位 GroupKFold (リーク防止)。False で従来のランダム KFold。
+    "cv_grouped":            True,
+    "group_corr_threshold":  0.9999,  # 隣接スペクトル相関がこれ未満で別ボード
 
     # ── 目的変数の変換 / 予測の後処理 ─────────────────────
     #   含水率は右に裾を引く分布のため log1p 変換で学習を安定化する
     #   (学習は変換後空間、予測は逆変換 → クリップ → 元スケールで評価)
     "target_transform": "log1p",       # "log1p" or "none"
-    "clip_predictions": [0.0, None],   # 含水率は非負 → 下限 0 にクリップ
+    #   含水率は非負・実用上 ~300% が上限 → 暴走予測を物理範囲にクリップ
+    #   (リーク無しでも不安定モデルが out-of-range を出すのを防ぐ安全網)
+    "clip_predictions": [0.0, 320.0],
 
     # ── 評価指標 ──────────────────────────────────────────
     #   計算・表示する指標 (詳細は metrics.py / docs/REPORT_GUIDE.md)
@@ -79,139 +159,9 @@ CONFIG = {
     "sg_polyorder":     2,     # 多項式の次数
 
     # ── モデル ────────────────────────────────────────────
-    #   type は models/ 以下の各モジュールの TYPE と対応
-    "models": {
-        # ---- 古典的な機械学習モデル ----
-        "PLS": {
-            "type":   "pls",
-            "params": {"n_components": 20},
-        },
-        "PCR": {
-            "type":   "pcr",
-            "params": {"n_components": 10},
-        },
-        "Ridge": {
-            "type":   "ridge",
-            "params": {"alpha": 1.0},
-        },
-        "Lasso": {
-            "type":   "lasso",
-            "params": {"alpha": 0.1, "max_iter": 10000},
-        },
-        "ElasticNet": {
-            "type":   "elasticnet",
-            "params": {"alpha": 0.1, "l1_ratio": 0.5, "max_iter": 10000},
-        },
-        "SVR": {
-            "type":   "svr",
-            "params": {"kernel": "rbf", "C": 1.0, "epsilon": 0.1},
-        },
-        "RandomForest": {
-            "type":   "rf",
-            "params": {"n_estimators": 100, "random_state": 42, "n_jobs": -1},
-        },
-        "XGBoost": {
-            "type":   "xgb",
-            "params": {
-                "n_estimators": 100, "learning_rate": 0.1,
-                "max_depth": 5, "random_state": 42,
-            },
-        },
-        "LightGBM": {
-            "type":   "lgbm",
-            "params": {
-                "n_estimators": 100, "learning_rate": 0.1,
-                "random_state": 42, "verbose": -1,
-            },
-        },
-
-        # ---- 深層学習モデル (要 PyTorch) ----
-        "1D-CNN": {
-            "type":   "cnn1d",
-            "params": {
-                "epochs":       80,
-                "batch_size":   64,
-                "lr":           1e-3,
-                "weight_decay": 1e-4,
-            },
-        },
-        "AE": {
-            "type":   "ae",
-            "params": {
-                "epochs":        120,
-                "batch_size":    64,
-                "lr":            1e-3,
-                "weight_decay":  1e-5,
-                "latent_dim":    32,
-                "hidden_dims":   [256, 128],
-                "recon_weight":  1.0,    # 再構成損失の重み
-                "reg_weight":    1.0,    # 回帰損失の重み
-            },
-        },
-        "SAE": {
-            "type":   "sae",
-            "params": {
-                "epochs":          120,
-                "batch_size":      64,
-                "lr":              1e-3,
-                "weight_decay":    1e-5,
-                "latent_dim":      64,
-                "hidden_dims":     [256, 128],
-                "recon_weight":    1.0,
-                "reg_weight":      1.0,
-                "sparsity_weight": 1e-3,  # latent への L1 スパース penalty
-            },
-        },
-        "VAE": {
-            "type":   "vae",
-            "params": {
-                "epochs":       120,
-                "batch_size":   64,
-                "lr":           1e-3,
-                "weight_decay": 1e-5,
-                "latent_dim":   32,
-                "hidden_dims":  [256, 128],
-                "recon_weight": 1.0,
-                "reg_weight":   1.0,
-                "kl_weight":    1e-3,    # KL ダイバージェンスの重み (β)
-            },
-        },
-        "GAN": {
-            "type":   "gan",
-            "params": {
-                "epochs":       150,
-                "batch_size":   64,
-                "lr":           2e-4,
-                "weight_decay": 0.0,
-                "hidden_dims":  [256, 128],
-                "adv_weight":   0.1,     # 敵対的損失の重み
-                "reg_weight":   1.0,     # 教師あり回帰損失の重み
-            },
-        },
-        "DeepSpectra": {
-            "type":   "deepspectra",
-            "params": {
-                "epochs":       100,
-                "batch_size":   64,
-                "lr":           1e-3,
-                "weight_decay": 1e-4,
-            },
-        },
-        "Transformer": {
-            "type":   "transformer",
-            "params": {
-                "epochs":       100,
-                "batch_size":   64,
-                "lr":           5e-4,
-                "weight_decay": 1e-4,
-                "patch_size":   32,      # スペクトルを分割するパッチ長
-                "d_model":      64,
-                "n_heads":      4,
-                "n_layers":     2,
-                "dropout":      0.1,
-            },
-        },
-    },
+    #   既定は頑健モデルのみ。深層モデルも使う(レポート比較)場合は:
+    #     "models": {**ROBUST_MODELS, **DEEP_MODELS},
+    "models": dict(ROBUST_MODELS),
 
     # ── メタ学習器 (スタッキング) ─────────────────────────
     "meta_ridge_alpha":    1.0,
@@ -229,7 +179,7 @@ CONFIG = {
 #   torch 系モデルは models/base.py の TorchRegressorBase により
 #   既定で「入力標準化 + 早期終了」が有効 (early_stopping=True,
 #   val_fraction=0.1, es_patience=15, min_epochs=20)。
-#   個別に変えたい場合は上記 CONFIG["models"][name]["params"] に
+#   個別に変えたい場合は DEEP_MODELS の params に
 #   early_stopping / val_fraction / es_patience / min_epochs を追加する。
 
 

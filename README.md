@@ -272,13 +272,17 @@ OOF（5-fold 交差検証）予測を元スケール（含水率 [%]）で評価
 
 | 工夫 | 内容 | 設定 |
 |------|------|------|
-| **目的変数の log1p 変換** | 右裾の重い含水率分布を圧縮し学習を安定化。学習は log1p 空間、評価は逆変換して元スケール | `CONFIG["target_transform"] = "log1p"`（"none" で無効化） |
-| **予測の非負クリップ** | 含水率は非負なので予測を 0 以上にクリップ | `CONFIG["clip_predictions"] = [0.0, None]` |
-| **深層モデルの入力標準化** | 前処理に依らず特徴量を標準化し NN の学習を安定化（リーク防止のため train 部分の統計で fit） | `models/base.py` / `models/gan.py`（常時有効） |
-| **早期終了 (Early Stopping)** | 学習中に検証分割の損失を監視し、ベスト重みを復元して過学習を抑制 | `CONFIG` モデル params の `early_stopping` 等（既定 ON） |
+| **★ ボード単位 GroupKFold** | 本データは同一ボードの繰り返し測定を含むため、ランダム KFold はリークし CV が極端に楽観的(R²≈0.997)になる。sample number 順の隣接スペクトル相関でボードを推定し、同一ボードを同じ fold に固める honest CV にすることで、汎化するモデルだけが選ばれる | `CONFIG["cv_grouped"]=True`, `group_corr_threshold` |
+| **頑健モデルを既定化** | 1322行・実質~150ボードしか無く深層モデルは過学習。既定は PLS/Ridge/SVR/kNN/RF/XGB/LightGBM 等の頑健モデル（正則化強め）。深層モデルはレポート用に `DEEP_MODELS` として温存 | `CONFIG["models"]=dict(ROBUST_MODELS)` |
+| **目的変数の log1p 変換** | 右裾の重い含水率分布を圧縮し学習を安定化。学習は log1p 空間、評価は逆変換して元スケール | `CONFIG["target_transform"]="log1p"` |
+| **予測の物理クリップ** | 含水率は非負・実用上~300%上限。暴走予測を範囲内に抑える安全網（リーク修正前は予測が1900に暴走しPublic 1884になった） | `CONFIG["clip_predictions"]=[0.0, 320.0]` |
+| **深層モデルの入力標準化＋早期終了** | 前処理に依らず標準化し、検証損失でベスト重みを復元して過学習抑制（train部分の統計で fit、リーク防止） | `models/base.py` / `models/gan.py` |
 | **NIR 定番前処理の追加** | `snv+sg_d1+standard` を前処理候補に追加 | `CONFIG["preprocessors"]` |
 
-これらにより、特に深層モデル（CNN/DeepSpectra/Transformer/AE系/GAN）の収束と汎化が改善します。
+> 🔬 **なぜ GroupKFold が決定的か**: ランダム KFold では同一ボードの繰り返しスキャンが
+> train/val 両方に入り「丸暗記」が起きる。その結果、リーク CV が選ぶ「ベスト」は
+> テストで暴走（例: filter 戦略の予測が全件~1900、Public RMSE 1884）。GroupKFold に
+> すると CV-RMSE がリーダーボード実測(~14)と一致し、選ばれる submission が安定する。
 
 ---
 
@@ -301,8 +305,10 @@ OOF（5-fold 交差検証）予測を元スケール（含水率 [%]）で評価
 | `CONFIG["models"]` | 使用するモデルとハイパラ | 全16モデル |
 | `CONFIG["preprocessors"]` | 使用する前処理 | 9種 |
 | `CONFIG["n_splits"]` | 交差検証の分割数 | 5 |
+| `CONFIG["cv_grouped"]` | ボード単位 GroupKFold（リーク防止） | `True` |
+| `CONFIG["group_corr_threshold"]` | ボード境界の隣接相関しきい値 | `0.9999` |
 | `CONFIG["target_transform"]` | 目的変数の変換 | `"log1p"` |
-| `CONFIG["clip_predictions"]` | 予測のクリップ範囲 | `[0.0, None]` |
+| `CONFIG["clip_predictions"]` | 予測のクリップ範囲 | `[0.0, 320.0]` |
 | `CONFIG["metrics"]` | 計算・表示する指標 | 8指標 |
 | `CONFIG["figure_dir"]` | 図の出力フォルダ | `"figures"` |
 | `CONFIG["eda_figures"]` | EDA 図を出すか | `True` |
