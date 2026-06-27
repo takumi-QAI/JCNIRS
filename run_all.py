@@ -161,6 +161,7 @@ def run_strategy(strategy_name,
         ridge_oof=ridge_oof, lasso_oof=lasso_oof, wa_oof=wa_oof,
         top_k=10,
         test_sn=test_sn, test_groups=test_groups,
+        all_oof_train=all_oof_train, blend_top_k=5,
     )
 
     # ---- ベスト手法の OOF と全指標 ----
@@ -304,6 +305,12 @@ def main():
     test_sn  = df_test[CONFIG["id_col"]].values
     test_groups = (df_test["species number"].values.astype(int)
                    if "species number" in df_test.columns else None)
+
+    # トランスダクティブ散乱補正 (msc_t / emsc_t) の参照 = train+test 合算の平均
+    #   (test の *スペクトル* のみ使用。ラベルは使わない = 合法)。
+    # 水バンド特徴 (wband) 用に波長軸も注入する。
+    CONFIG["_scatter_ref"] = np.vstack([X_train_spec, X_test_spec]).mean(axis=0)
+    CONFIG["_wavelengths"] = wavelengths
 
     # ---- EDA 図 ----
     if CONFIG.get("eda_figures", True):

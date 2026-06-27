@@ -417,7 +417,7 @@ def create_all_submissions(
     wa_test_pred, overall_best,
     ridge_cv, lasso_cv, wa_cv, config,
     y_train=None, ridge_oof=None, lasso_oof=None, wa_oof=None, top_k=10,
-    test_sn=None, test_groups=None,
+    test_sn=None, test_groups=None, all_oof_train=None, blend_top_k=5,
 ):
     """全モデル×前処理の個別予測 + アンサンブル予測を CSV に出力する。
 
@@ -500,6 +500,26 @@ def create_all_submissions(
             "name": name, "kind": "ensemble",
             "rmse": float(rmse), "metrics": scores, "test": tpred,
         })
+
+    # ---- 等重み top-k blend (CV で重み最適化しない頑健アンサンブル) ----
+    #   友人の知見: SLSQP 重み最適化は CV 過適合しやすい → 単純平均を候補に入れる。
+    if all_oof_train is not None and y_train is not None:
+        singles = sorted(
+            [c for c in candidates if c["kind"] == "single"],
+            key=lambda c: c["rmse"])
+        kk = min(blend_top_k, len(singles))
+        if kk >= 2:
+            names = [c["name"] for c in singles[:kk]]
+            oof_blend = np.mean([all_oof_train[n] for n in names], axis=0)
+            test_blend = np.mean([all_test_preds[n] for n in names], axis=0)
+            scores = compute_metrics(y_train, oof_blend, metric_keys)
+            candidates.append({
+                "name": f"ensemble_equal_top{kk}", "kind": "ensemble",
+                "rmse": scores["RMSE"], "metrics": scores, "test": test_blend,
+            })
+            print(f"\n  --- 等重み top-{kk} blend ---")
+            print(f"    構成: {names}")
+            print(f"    CV-RMSE = {scores['RMSE']:.4f}")
 
     # CV-RMSE 昇順 = R2 / RPD / RPIQ でも最良順 (RMSE の単調変換のため)
     candidates.sort(key=lambda c: c["rmse"])

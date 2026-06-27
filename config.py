@@ -71,6 +71,24 @@ ROBUST_MODELS = {
                               "colsample_bytree": 0.5, "min_child_samples": 20,
                               "reg_lambda": 2.0, "random_state": 42,
                               "verbose": -1}},
+    # ★ 実績ベース主力 (友人の EXPERIMENTS.md, v1/v11=LB 10.6)。
+    #   num_leaves=31・2000 本・早期終了・マルチシード平均。単発固定本数の
+    #   LightGBM (v16=LB 22) より honest に汎化する。A 系前処理(snv+sg_d1 等)と相性◎。
+    "LightGBM_MS": {"type": "lgbm_ms",
+                    "params": {"n_estimators": 2000, "learning_rate": 0.03,
+                               "num_leaves": 31, "subsample": 0.8,
+                               "colsample_bytree": 0.5, "min_child_samples": 20,
+                               "reg_lambda": 2.0, "verbose": -1,
+                               "n_seeds": 4, "val_fraction": 0.12,
+                               "es_rounds": 100}},
+    # マルチシード + 早期終了 XGBoost (分散低減)。LightGBM_MS と並ぶ主力候補。
+    "XGBoost_MS": {"type": "xgb_ms",
+                   "params": {"n_estimators": 2000, "learning_rate": 0.03,
+                              "max_depth": 4, "min_child_weight": 1,
+                              "subsample": 0.8, "colsample_bytree": 0.5,
+                              "reg_lambda": 2.0,
+                              "n_seeds": 4, "val_fraction": 0.12,
+                              "es_rounds": 50}},
 }
 
 # 深層モデル (研究レポートのモデル比較用)。
@@ -136,12 +154,15 @@ CONFIG = {
     #   ボード単位 GroupKFold (リーク防止)。False で従来のランダム KFold。
     "cv_grouped":            True,
     #   ボード ID の決め方:
-    #     True  = species number 列をそのままボード ID に使う (★推奨)
-    #             本データは 1 species = 1 ボード(乾燥曲線) で、test は 6 ボードを
-    #             丸ごと held-out している。species 単位 GroupKFold は test 条件と
-    #             完全に一致する honest CV。
-    #     False = 隣接スペクトル相関でボードを推定 (group_corr_threshold を使用)。
-    "group_by_species":      True,
+    #     False = 隣接スペクトル相関でボードを推定 (group_corr_threshold)。★既定・LB較正済み
+    #             ~150 サブグループに分かれ「板内のそこそこ未知への汎化」を測る。実測で
+    #             CV≈14.6 が実 LB(embedded=14.49) とよく一致した。test の 6 板は全て内挿
+    #             (train 範囲内) なので、この粒度が LB の現実に最も近い。
+    #     True  = species number をそのままボード ID に使う = 完全な leave-one-board-out。
+    #             「未知の板を丸ごと当てる」honest な難易度だが、train の極端板(298%の外挿)
+    #             まで含むため LB(~14)より過大(~20)に出る。さらに過剰に悲観的なため頑健だが
+    #             平凡なモデル(RF 等)を選びがち。レポートで全板汎化を論じる時のみ True。
+    "group_by_species":      False,
     "group_corr_threshold":  0.9999,  # 隣接スペクトル相関がこれ未満で別ボード
 
     # ── 目的変数の変換 / 予測の後処理 ─────────────────────
@@ -157,8 +178,9 @@ CONFIG = {
     #   変化する乾燥時系列。per-scan 予測にこの制約を課す(保序回帰)と、スペクトル
     #   ノイズが系列方向に平均化され誤差が下がる (honest LOBO で 54→34)。
     #   CV(OOF) とテスト予測の双方に同一処理を適用するため CV は honest なまま。
-    #   時系列でないデータに流用する場合は False にすること。
-    "postprocess_board_smooth": True,
+    #   ⚠ 実績(友人の EXPERIMENTS.md v15/v16)では LB 改善に繋がらなかったため
+    #     既定 OFF。honest LOBO では悪化しないので、LB で A/B 検証する場合のみ True に。
+    "postprocess_board_smooth": False,
     "postprocess_method":       "isotonic",  # "isotonic" | "poly2" | "poly3"
 
     # ── 評価指標 ──────────────────────────────────────────
@@ -169,16 +191,28 @@ CONFIG = {
     #   「+」で連結すると順に適用される
     #   スペクトル変換 : snv, msc, sg_d1, sg_d2
     #   スケーリング   : standard, minmax, powertransformer, rankgauss, genlog
+    #   ★ A 系 (snv+sg_d1 系) が実績で最有力 (友人の EXPERIMENTS.md)。
+    #   detrend / l2norm は A 系のバリアント。emsc / *_t / dwt / wband は
+    #   「どの処理が効くか」をログの Model×Preprocessor 表で比較するための候補。
+    #   ⚠ 全戦略×全モデルで回すと重い。前処理の比較だけなら
+    #     CONFIG_FS["strategies"]=["none"] にして 1 戦略で回すと速い。
     "preprocessors": [
-        "standard",            # StandardScaler のみ
         "snv",                 # Standard Normal Variate
         "msc",                 # Multiplicative Scatter Correction
-        "sg_d1",               # Savitzky-Golay 1 次微分
-        "sg_d2",               # Savitzky-Golay 2 次微分
-        "sg_d1+standard",      # 1 次微分 → StandardScaler
-        "sg_d2+standard",      # 2 次微分 → StandardScaler
-        "snv+sg_d1",           # SNV → 1 次微分
-        "snv+sg_d1+standard",  # SNV → 1 次微分 → StandardScaler (NIR 定番)
+        "sg_d2+standard",      # 2 次微分 → StandardScaler (B 系)
+        "snv+sg_d1",           # ★ A 系 (A_no_dwt): SNV → 1 次微分 (最有力)
+        "snv+sg_d1+standard",  # ★ A 系: SNV → 1 次微分 → StandardScaler (NIR 定番)
+        "snv+detrend+sg_d1",   # ★ A_detrend: SNV → detrend → 1 次微分
+        "snv+sg_d1+l2norm",    # ★ A_norm: SNV → 1 次微分 → L2 正規化
+        "msc+sg_d2",           # B 系: MSC → 2 次微分
+        # --- 散乱補正の比較 (ドメインシフト対策) ---
+        "emsc",                # EMSC (多項式ベースライン + 乗法補正)
+        "emsc+sg_d1",          # EMSC → 1 次微分
+        "msc_t",               # MSC (トランスダクティブ参照)
+        "emsc_t+sg_d1",        # EMSC(トランスダクティブ) → 1 次微分
+        # --- 追加特徴の比較 ---
+        "snv+sg_d1+dwt",       # A 系 + 多重解像度ウェーブレット係数
+        "snv+wband",           # SNV + 水吸収バンド特徴
     ],
 
     # Savitzky-Golay パラメータ
