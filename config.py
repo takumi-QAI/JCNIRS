@@ -33,7 +33,7 @@ except ImportError:
 
 
 # ============================================================
-# モデル定義 (頑健モデル / 深層モデルを分けて管理)
+# モデル定義 (古典的な機械学習モデルのみ。深層モデルは精度に寄与せず削除済み)
 # ============================================================
 # 既定 = leaderboard 向けの頑健・高速モデル。
 # honest(GroupKFold) CV で汎化するよう正則化を強めにしてある。
@@ -78,23 +78,11 @@ ROBUST_MODELS = {
                               "verbose": -1}},
 }
 
-# マルチシード + 早期終了 GBM (LightGBM_MS / XGBoost_MS)。
-#   ⚠ honest CV(0.9999) の実測で plain な浅い XGBoost/LightGBM に一貫して負け、
-#     かつ 4 seed × 2000 本で非常に低速(none 戦略だけで ~4.5h の主因)だったため
-#     既定から除外。試したい場合は ROBUST_MODELS に下記を追加する:
-#   "LightGBM_MS": {"type":"lgbm_ms","params":{"n_estimators":2000,"learning_rate":0.03,
-#       "num_leaves":31,"subsample":0.8,"colsample_bytree":0.5,"min_child_samples":20,
-#       "reg_lambda":2.0,"verbose":-1,"n_seeds":4,"val_fraction":0.12,"es_rounds":100}},
-#   "XGBoost_MS": {"type":"xgb_ms","params":{"n_estimators":2000,"learning_rate":0.03,
-#       "max_depth":4,"subsample":0.8,"colsample_bytree":0.5,"reg_lambda":2.0,
-#       "n_seeds":4,"val_fraction":0.12,"es_rounds":50}},
-#   (深さを浅く: XGBoost_MS max_depth=3 / LightGBM_MS num_leaves=15 にすると改善余地あり)
-
-# 深層モデル (研究レポートのモデル比較用)。
-#   ※ 1322 行・実質 150 ボードしか無いため honest CV では過学習しやすく、
-#     学習も低速。leaderboard 目的では既定で無効にしている。
-#   モデル比較レポートを作るときは CONFIG["models"] を
-#     {**ROBUST_MODELS, **DEEP_MODELS} に変更して有効化する。
+# 深層モデル (PyTorch)。組み合わせを増やすための研究用。
+#   ※ 1322 行・実質 19 ボードしか無いため honest CV では過学習しやすく低速。
+#     既定 (CONFIG["models"]) は ROBUST のみ。深層も含めたい時は
+#       "models": {**ROBUST_MODELS, **DEEP_MODELS}  に変更する。
+#     search_best.py では SEARCH_DEEP=True で探索に加えられる。
 DEEP_MODELS = {
     "1D-CNN": {"type": "cnn1d",
                "params": {"epochs": 80, "batch_size": 64, "lr": 1e-3,
@@ -127,7 +115,6 @@ DEEP_MODELS = {
                                "d_model": 64, "n_heads": 4, "n_layers": 2,
                                "dropout": 0.1}},
 }
-
 
 # ============================================================
 # CONFIG ─ コアパイプラインの設定
@@ -220,8 +207,6 @@ CONFIG = {
     "sg_polyorder":     2,     # 多項式の次数
 
     # ── モデル ────────────────────────────────────────────
-    #   既定は頑健モデルのみ。深層モデルも使う(レポート比較)場合は:
-    #     "models": {**ROBUST_MODELS, **DEEP_MODELS},
     "models": dict(ROBUST_MODELS),
 
     # ── メタ学習器 (スタッキング) ─────────────────────────
@@ -238,13 +223,6 @@ CONFIG = {
     # ── ログ ──────────────────────────────────────────────
     "log_dir":      "logs",      # 実行ログ (run_<日時>.log) の出力フォルダ
 }
-
-# ── 深層モデルの早期終了について ───────────────────────────
-#   torch 系モデルは models/base.py の TorchRegressorBase により
-#   既定で「入力標準化 + 早期終了」が有効 (early_stopping=True,
-#   val_fraction=0.1, es_patience=15, min_epochs=20)。
-#   個別に変えたい場合は DEEP_MODELS の params に
-#   early_stopping / val_fraction / es_patience / min_epochs を追加する。
 
 
 # ============================================================

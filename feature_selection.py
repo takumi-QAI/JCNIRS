@@ -81,7 +81,7 @@ def select_embedded(X, y, config):
     return mask
 
 
-# 戦略名 → 関数 (古典的手法のみ。amplify は run_all.py で統合)
+# 戦略名 → 関数 (古典的手法のみ。amplify は run_research.py で統合)
 SELECTORS = {
     "none":     select_none,
     "filter":   select_filter,

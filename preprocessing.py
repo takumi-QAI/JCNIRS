@@ -97,7 +97,7 @@ class SpectralPreprocessor:
         """散乱補正(MSC/EMSC)の参照スペクトル。
 
         ``_t`` で終わるステップは config["_scatter_ref"] (= train+test 合算の平均、
-        run_all で注入) を使う = トランスダクティブ。無ければ fit データ平均に戻す。
+        実行時に注入) を使う = トランスダクティブ。無ければ fit データ平均に戻す。
         """
         if step.endswith("_t"):
             ref = self.config.get("_scatter_ref")

@@ -1,34 +1,29 @@
 """
-JCNIRS 全実行スクリプト (run_all.py)
-=====================================
-これ 1 本を実行すれば、全特徴量選択戦略 × 全モデル × 全前処理 +
-アンサンブルの提出ファイル生成、評価指標の算出、研究レポート用の
-可視化までを通しで行います。
+JCNIRS 研究用スクリプト (run_research.py) ─ 特徴量選択の対照実験
+================================================================
+研究テーマ「**量子アニーリング (Amplify QUBO) による特徴量選択の有用性**」のための
+**対照実験 (controlled experiment)** プログラム。
 
-    python run_all.py
+★ ポイント: **モデルと前処理を固定**し、**特徴量選択の手法だけ**を
+  ① none ② filter(MI) ③ wrapper(RFE) ④ embedded(Lasso) ⑤ amplify(QUBO)
+  と変えて比較する。他条件が同じなので「選択手法そのものの差」を純粋に考察できる。
+  (※ 精度を上げて提出を作るのは search_best.py の役目。擬似ラベルも search_best に統合済み)
 
-処理フロー
-----------
-1. データ読み込み (data.load_data)
-2. EDA 図 (含水率分布・スペクトル概観) を出力
-3. 各特徴量選択戦略でスペクトル特徴量を選択
-   ① none ② filter ③ wrapper ④ embedded ⑤ amplify(量子アニーリング)
-4. 戦略ごとに pipeline で CV → スタッキング → 加重平均 → 提出生成 → 戦略別の図
-5. 全戦略の精度・特徴量選択品質を比較しグラフ化 (figures/ に出力)
+    python run_research.py
+
+固定設定 (下の RESEARCH_MODELS / RESEARCH_PREPS で変更可):
+  同一の (モデル×前処理) グリッドを固定し、特徴量選択 (CONFIG_FS["strategies"]) だけ変える。
+  CV は species 単位 GroupKFold (≒LB)、選択は各 fold 内で実行 (リーク防止)。
+  公平性のため比較は「グリッド平均 CV-RMSE (周辺化)」で行う。
 
 出力
 ----
 submissions_<strategy>/    各戦略の提出ファイル群
-figures/                   EDA・戦略別・戦略横断の図 (PNG)
+figures/eda, figures/strategies/<strategy>, figures/comparison/   研究用の図
+  特に comparison/ の compare_strategy_metrics / compare_selected_wavelengths /
+  compare_feature_overlap / compare_qubo_diagnostics が QUBO 考察の核。
 
 各図・各指標の詳しい意味は docs/REPORT_GUIDE.md を参照。
-
-⚠ 実行時間について
-------------------
-既定では「全16モデル × 全9前処理 × 全5戦略 × 5-fold CV」を実行します。
-深層モデルを含むため CPU 環境では数時間規模です。速度を優先する場合は
-config.py の CONFIG["models"] / CONFIG["preprocessors"] / CONFIG_FS["strategies"]
-を絞り込んでください (該当行をコメントアウトするだけ)。
 """
 
 import os
@@ -42,6 +37,36 @@ import numpy as np
 import pandas as pd
 
 from config import CONFIG, CONFIG_FS, STRATEGY_LABELS
+
+# ============================================================
+#  研究用の固定設定 (対照実験の公平性)
+# ============================================================
+#  ★ 公平性の考え方:
+#    特徴量選択の効果は「モデル・前処理との相性」に強く依存する。例えば
+#      - 木モデル(XGB/LGB)は内部で勝手に特徴選択するので外部選択の差が出にくい
+#      - 線形/カーネル(PLS/Ridge/SVR)は選択の良し悪しが素直に効く
+#    そこで「単一の (モデル, 前処理) を恣意的に固定」すると、その組に有利な選択手法が
+#    勝ってしまい不公平。→ **同一の小グリッド(モデル×前処理)で各選択手法を評価し、
+#    その平均(周辺化)で比較**する。グリッドは全選択手法で完全に同一なので公平。
+#    (n_features・CV・fold もすべて統一。比較は species-LOSO=LB の honest CV で行う)
+RESEARCH_MODELS = {
+    # 選択に敏感な線形/カーネル系 (選択の良し悪しが効く)
+    "PLS":   {"type": "pls",   "params": {"n_components": 15}},
+    "Ridge": {"type": "ridge", "params": {"alpha": 100.0}},
+    "SVR":   {"type": "svr",   "params": {"kernel": "rbf", "C": 10.0, "epsilon": 0.05}},
+    # 内部選択を持つ木系 (外部選択の効果は出にくいが対照として重要)
+    "XGBoost":  {"type": "xgb",  "params": {"n_estimators": 800, "learning_rate": 0.05,
+                                            "max_depth": 3, "subsample": 0.8,
+                                            "colsample_bytree": 0.5, "reg_lambda": 2.0,
+                                            "random_state": 42}},
+    "LightGBM": {"type": "lgbm", "params": {"n_estimators": 800, "learning_rate": 0.03,
+                                            "num_leaves": 15, "subsample": 0.8,
+                                            "colsample_bytree": 0.5, "min_child_samples": 20,
+                                            "reg_lambda": 2.0, "random_state": 42,
+                                            "verbose": -1}},
+}
+#   微分系の標準前処理に統一 (線形/PLS が素直に働く帯。生 snv は PLS が退化するため不使用)
+RESEARCH_PREPS = ["snv+sg_d1", "emsc+sg_d1", "msc+sg_d2"]   # 全選択手法で同一
 from data import load_data, _header
 from models import build_all_models
 from metrics import compute_metrics, METRIC_INFO
@@ -214,6 +239,11 @@ def run_strategy(strategy_name,
     elapsed = time.time() - t0
     best_cv = method_rmse[best_method]
 
+    # 公平比較の主指標: 固定グリッド(モデル×前処理)上の単体 CV-RMSE の平均/中央値
+    #   (この選択手法が「どのモデル/前処理と組んでも平均的に効くか」を周辺化で見る)
+    grid_mean_cv   = float(df_results["CV-RMSE"].mean())
+    grid_median_cv = float(df_results["CV-RMSE"].median())
+
     summary = {
         "strategy":     strategy_name,
         "label":        label,
@@ -221,6 +251,8 @@ def run_strategy(strategy_name,
         "best_single":  float(overall_best["CV-RMSE"]),
         "best_combo":   (f"{overall_best['Model']} × "
                          f"{overall_best['Preprocessor']}"),
+        "grid_mean_cv":   grid_mean_cv,    # ★ 公平比較の主指標 (グリッド平均)
+        "grid_median_cv": grid_median_cv,
         "ridge_cv":     ridge_cv,
         "lasso_cv":     lasso_cv,
         "wa_cv":        wa_cv,
@@ -257,6 +289,20 @@ def compare_strategies(results: list):
 
     print("\n  (指標の意味は docs/REPORT_GUIDE.md を参照)")
 
+    # ---- ★ 公平比較: 固定グリッド上の平均 CV-RMSE (周辺化) ----
+    print("\n  === 公平比較: 同一グリッド(モデル×前処理)上の CV-RMSE ===")
+    print(f"  {'strategy':10s} {'#feat':>6s} {'grid_mean':>10s} "
+          f"{'grid_median':>12s} {'best':>8s}")
+    print("  " + "-" * 52)
+    for r in sorted(results, key=lambda r: r["grid_mean_cv"]):
+        print(f"  {r['strategy']:10s} {r['n_features']:6d} "
+              f"{r['grid_mean_cv']:10.3f} {r['grid_median_cv']:12.3f} "
+              f"{r['best_single']:8.3f}")
+    base = next((r for r in results if r["strategy"] == "none"), None)
+    if base is not None:
+        print(f"\n  → none(全波長)の grid_mean={base['grid_mean_cv']:.3f} を基準に、"
+              f"各選択手法が平均で上回るか(下回るか)で『選択の有用性』を公平に判断する。")
+
     # ---- 戦略横断の図 (結果ベース) ----
     try:
         viz.plot_strategy_comparison(results, CONFIG)
@@ -265,12 +311,11 @@ def compare_strategies(results: list):
     except Exception as e:
         print(f"  ⚠ 戦略横断図 (結果) の生成に失敗: {e}")
 
-    # ---- 最良戦略 ----
-    best = min(results, key=lambda r: r["best_cv"])
+    # ---- 最良戦略 (公平指標 = グリッド平均で) ----
+    best = min(results, key=lambda r: r["grid_mean_cv"])
     print("\n  ╔══════════════════════════════════════╗")
-    print(f"  ║  最良戦略: {best['label']:24s}  ║")
-    print(f"  ║  Best CV-RMSE: {best['best_cv']:.4f}              ║")
-    print(f"  ║  特徴量数    : {best['n_features']:<24d}║")
+    print(f"  ║  最良(公平/グリッド平均): {best['label']:14s}  ║")
+    print(f"  ║  grid_mean CV-RMSE: {best['grid_mean_cv']:.4f}          ║")
     print("  ╚══════════════════════════════════════╝")
 
 
@@ -291,11 +336,19 @@ def visualize_feature_selection(results, wavelengths, X_train_spec, y_train):
 # メイン実行
 # ============================================================
 def main():
-    """全戦略を順に実行し、比較結果を出力する。"""
+    """対照実験: モデル・前処理を固定し、特徴量選択手法だけを変えて比較する。"""
 
     # ---- ログのファイル出力を開始 ----
     log_path = setup_logging(CONFIG)
     print(f"  ログ出力: {os.path.relpath(log_path, CONFIG['data_dir'])}")
+
+    # ---- 対照実験の固定グリッド (全選択手法で同一のモデル×前処理。公平性のため) ----
+    CONFIG["models"] = dict(RESEARCH_MODELS)
+    CONFIG["preprocessors"] = list(RESEARCH_PREPS)
+    print(f"  [研究/対照実験] 固定グリッド: モデル={list(RESEARCH_MODELS)} × "
+          f"前処理={RESEARCH_PREPS}")
+    print(f"  → 各選択手法 {CONFIG_FS['strategies']} をこの同一グリッドで評価し、"
+          f"平均(周辺化)で公平に比較")
 
     # ---- データ読み込み (全戦略で共通) ----
     (df_train, df_test,
