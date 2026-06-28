@@ -51,6 +51,11 @@ ROBUST_MODELS = {
     "RandomForest": {"type": "rf",
                      "params": {"n_estimators": 300, "random_state": 42,
                                 "n_jobs": -1}},
+    # Extra-Trees: honest species-LOSO で emsc+sg_d1 と組むと強い(CV≈18.8)。
+    #   SVR/GBM と毛色が違うのでアンサンブルの多様性源として有用。
+    "ExtraTrees": {"type": "et",
+                   "params": {"n_estimators": 600, "random_state": 42,
+                              "n_jobs": -1}},
     # XGBoost: honest GroupKFold 調整で max_depth=3(浅い)+多本数が最良。
     #   浅い木は「未知ボードへの汎化」に強い (深い木はボードを丸暗記しやすい)。
     #   最適な深さは特徴量セットで変わる (冗長な MI 選択は d3、QUBO の低冗長選択は

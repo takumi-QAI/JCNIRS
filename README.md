@@ -336,6 +336,50 @@ OOF（5-fold 交差検証）予測を元スケール（含水率 [%]）で評価
 
 ---
 
+## ★ 最良提出のサーチ — `search_best.py`（あなたが回してログから選ぶ）
+
+「多数の前処理 × 多数のモデル(パラメータ違い) × 連結特徴 × 貪欲アンサンブル」を
+**honest な species-LOSO CV（≒実LB）**で総当たりし、CV 最良＝LB 最良の提出を探す
+専用スクリプト。`run_all.py`（研究レポート・全戦略比較用）とは別に、**精度（提出）特化**。
+
+```powershell
+python search_best.py            # フル探索（数時間）
+$env:SEARCH_QUICK=1; python search_best.py   # まず動作確認（数分・少数）
+```
+
+- なぜ信頼できる: species 単位 CV は実測で LB に一致（例 SVR(C=10)×emsc+sg_d1 が
+  **species-CV 17.95**、LGB×emsc+sg_d1 が 19.42 ≒ **実LB 19.56**）。**CV 最良 ≒ LB 最良**。
+- 出力 `submissions_manual/`:
+  - `search_ranking.csv` … 全候補＋貪欲アンサンブルの species-CV ランキング
+  - `sub_search_greedy_ensemble.csv` … 貪欲アンサンブル（多くは最良）
+  - `sub_search_best_single.csv` / `sub_search_top2,3.csv` … 単体上位
+  - ログ末尾の **`>>> 推奨提出`** が示す CSV を提出する。
+- 探索範囲はファイル冒頭の `SINGLES_FULL / CONCAT_FULL / MODELS_FULL` を編集して
+  自由に増減できる（前処理・連結・モデルのパラメータgrid）。`GBM_SEEDS` 等も調整可。
+- 💡 EXPERIMENTS.md は参考程度に。**最終判断は本サーチの honest CV と実LB**で
+  （例: 友人は「SVR はダメ」としたが C=10+EMSC では本サーチで単体最良）。
+
+---
+
+## 擬似ラベル / transductive — `pseudo_label.py`（≤15 を狙う本命路線・honest検証つき）
+
+総当たり(search_best.py)の honest 天井は ~17。それより下（友人 v1=10.6 の路線）を狙うには、
+**test の乾燥曲線構造を使う半教師あり学習**が必要:
+①base学習→test予測 ②各testボードで sample number 順に**単調平滑化**して擬似ラベル化
+③testスペクトル+擬似ラベルを学習に追加し再学習 ④反復。
+
+```powershell
+python pseudo_label.py
+# Docker:  docker run --rm --gpus all -v ${PWD}:/app jcnirs python pseudo_label.py
+```
+
+- ⚠ 擬似ラベルは諸刃の剣（悪化することも）。本スクリプトは **species-LOSO(≒LB) で
+  「base vs 平滑化のみ vs 自己学習」を必ず比較**し、改善した時だけ採用するよう判定を出す。
+- 出力 `submissions_manual/`: `pseudo_loso.csv`（LOSO比較表）、`sub_pseudo_*.csv`（test予測）。
+  ログ末尾 **`>>> 推奨提出`**（ただし判定が「改善せず」なら search_best の ~17 を出すこと）。
+
+---
+
 ## アンサンブル手法
 
 各モデル×前処理の CV 結果（CV-RMSE）をもとに 3 手法でアンサンブル:

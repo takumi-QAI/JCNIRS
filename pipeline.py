@@ -14,7 +14,9 @@ Step 7 : 全提出ファイルの作成
 """
 
 import os
+import re
 import copy
+from collections import Counter
 
 import numpy as np
 import pandas as pd
@@ -484,8 +486,9 @@ def create_all_submissions(
     print("\n  --- 個別モデル × 前処理 ---")
     for _, row in df_results.iterrows():
         key  = row["combo_key"]
-        safe = (key.replace(" ", "_").replace("+", "_")
-                .replace("/", "_").replace(":", "_"))
+        # ファイル名に使えない文字 (+ : | / 空白 * ? 等) をまとめて _ に置換
+        # (concat:a+b|c のような前処理名でも Windows で安全なファイル名にする)
+        safe = re.sub(r"[^0-9A-Za-z._=-]+", "_", key)
         _save(f"sub_{safe}.csv", all_test_preds[key])
     print(f"    {len(all_test_preds)} ファイル作成")
 
@@ -555,6 +558,31 @@ def create_all_submissions(
             print(f"\n  --- 等重み top-{kk} blend ---")
             print(f"    構成: {names}")
             print(f"    CV-RMSE = {scores['RMSE']:.4f}")
+
+        # ---- 貪欲アンサンブル選択 (Caruana, 上位プールから等重み積み上げ) ----
+        #   SLSQP/Ridge メタの重み最適化は CV 過適合しやすい(実LBで悪化を確認)。
+        #   等重みで「足すと CV が下がるモデル」を貪欲に積むのは過適合に頑健。
+        pool = [c["name"] for c in singles[:20]]
+        if len(pool) >= 2:
+            def _r(p):
+                return float(np.sqrt(np.mean((p - y_train) ** 2)))
+            cur, ssum, hist = [], np.zeros(len(y_train)), []
+            for _ in range(15):
+                bk = min(pool, key=lambda k: _r((ssum + all_oof_train[k]) / (len(cur) + 1)))
+                cur.append(bk); ssum = ssum + all_oof_train[bk]
+                hist.append((tuple(cur), _r(ssum / len(cur))))
+            mem = Counter(min(hist, key=lambda x: x[1])[0])
+            tot = sum(mem.values())
+            g_oof  = sum(c * all_oof_train[k]  for k, c in mem.items()) / tot
+            g_test = sum(c * all_test_preds[k] for k, c in mem.items()) / tot
+            g_scores = compute_metrics(y_train, g_oof, metric_keys)
+            candidates.append({
+                "name": "ensemble_greedy", "kind": "ensemble",
+                "rmse": g_scores["RMSE"], "metrics": g_scores, "test": g_test,
+            })
+            print(f"\n  --- 貪欲アンサンブル (Caruana) ---")
+            print(f"    構成: {dict(mem)}")
+            print(f"    CV-RMSE = {g_scores['RMSE']:.4f}")
 
     # CV-RMSE 昇順 = R2 / RPD / RPIQ でも最良順 (RMSE の単調変換のため)
     candidates.sort(key=lambda c: c["rmse"])
