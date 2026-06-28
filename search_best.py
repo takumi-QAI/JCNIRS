@@ -67,7 +67,8 @@ TOPN_SUBMIT    = 3       # 単体上位 N も提出 CSV にする
 
 # --- 深層モデル (PyTorch) も探索に加えるか。多くの組合せを見たい時に True ---
 #   ⚠ 非常に低速 (epochs 学習 × 全 fold)。QUICK では自動 OFF。SEARCH_DEEP=0 で無効化可。
-SEARCH_DEEP    = os.environ.get("SEARCH_DEEP", "1").lower() in ("1", "true", "yes")
+SEARCH_DEEP=0
+# SEARCH_DEEP    = os.environ.get("SEARCH_DEEP", "1").lower() in ("1", "true", "yes")
 
 # --- 擬似ラベル/transductive も探索の 1 候補として組み込むか ---
 #   各 (強モデル × 単体前処理) に対し、自己学習版 "..__pseudo" も評価する。

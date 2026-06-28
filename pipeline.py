@@ -151,6 +151,16 @@ def run_full_evaluation(X_train_spec, X_test_spec,
     n_train = X_train_spec.shape[0]
     n_test  = X_test_spec.shape[0]
 
+    # ボード(species number)の one-hot は、本データでは test=未知ボードを丸ごと
+    # held-out しているため、未知ボードの列は学習時に常にゼロ=純粋なノイズにしかならず
+    # モデル(特に SVR/カーネル)を著しく悪化させる (emsc+sg_d1 で SVR 17.95→46.97 を確認)。
+    # よって既定では使わない (精度提出用の search_best も one-hot を使っていない)。
+    # 復活させたい場合のみ config["use_category_features"]=True。
+    if not config.get("use_category_features", False):
+        X_train_cat = np.zeros((n_train, 0), dtype=float)
+        X_test_cat  = np.zeros((n_test, 0), dtype=float)
+        print("  カテゴリ特徴(species one-hot)は不使用 (未知ボード予測ではノイズのため)")
+
     if tkind != "none":
         print(f"  目的変数の変換: {tkind} (予測は逆変換して元スケールで評価)")
 
