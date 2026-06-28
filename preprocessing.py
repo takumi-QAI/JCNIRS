@@ -47,12 +47,22 @@ class SpectralPreprocessor:
 
     def __init__(self, method: str = "standard", config: dict | None = None):
         self.method = method
-        self.steps = method.split("+")
         self.config = config or {}
-        self._fitted: list = []
+        # "concat:A|B|C" → 複数前処理を別々に適用して横連結 (友人の A/B/C 特徴)
+        self.is_concat = method.startswith("concat:")
+        if self.is_concat:
+            specs = method[len("concat:"):].split("|")
+            self._subs = [SpectralPreprocessor(s, config) for s in specs]
+        else:
+            self.steps = method.split("+")
+            self._fitted: list = []
 
     # ---- public API ----
     def fit(self, X, y=None):
+        if self.is_concat:
+            for s in self._subs:
+                s.fit(X)
+            return self
         self._fitted = []
         X_cur = X.copy()
         for step in self.steps:
@@ -61,6 +71,8 @@ class SpectralPreprocessor:
         return self
 
     def transform(self, X):
+        if self.is_concat:
+            return np.hstack([s.transform(X) for s in self._subs])
         X_cur = X.copy()
         for step, fitted_obj in self._fitted:
             X_cur = self._transform_one(step, X_cur, fitted_obj)

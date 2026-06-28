@@ -102,10 +102,14 @@ def verify_preprocessors(X_train_spec: np.ndarray, config: dict):
 def run_full_evaluation(X_train_spec, X_test_spec,
                         X_train_cat, X_test_cat,
                         y_train, models, config, groups=None,
-                        train_sn=None, test_sn=None, test_groups=None):
+                        train_sn=None, test_sn=None, test_groups=None,
+                        train_board=None, selector=None, config_fs=None):
     """全 前処理×モデル の 5-Fold CV を実行し、OOF 予測とテスト予測を収集する。
 
     groups を渡すとボード単位 GroupKFold (リーク防止) になる。
+    selector を渡すと **各 fold の train だけ**で特徴選択する (選択リーク防止)。
+    selector(X_fold_train, y_fold_train, config_fs) -> bool マスク。None なら全特徴。
+    X_train_spec/X_test_spec は全(生)スペクトル。
 
     Returns
     -------
@@ -119,7 +123,25 @@ def run_full_evaluation(X_train_spec, X_test_spec,
     splits = make_splits(config, X_train_spec.shape[0], groups)
     if config.get("cv_grouped", True) and groups is not None:
         print(f"  CV: ボード単位 GroupKFold ({config['n_splits']} fold, "
-              f"{int(groups.max()) + 1} ボード)")
+              f"{len(np.unique(groups))} グループ)")
+    # 乾燥曲線の平滑化はボード(=species)単位で行う。CV の groups (細分化される
+    # 相関ヒューリスティック)とは別物なので train_board を優先して使う。
+    smooth_board = train_board if train_board is not None else groups
+
+    # ---- 特徴量選択を CV の中で実行 (各 fold の train だけで選ぶ = リーク防止) ----
+    #   旧実装は全データで 1 回選択 → val の情報が漏れて CV が楽観的になっていた
+    #   (例: amplify が CV 11.7 でも LB 23.6)。fold ごとに選び直して honest 化する。
+    sel_ref = config.get("_scatter_ref")
+    sel_wl  = config.get("_wavelengths")
+    n_feat_full = X_train_spec.shape[1]
+    if selector is not None:
+        fold_masks = [np.asarray(selector(X_train_spec[tr], y_train[tr], config_fs),
+                                 dtype=bool) for tr, _ in splits]
+        print(f"  特徴選択: 各 fold の train で再選択 (honest, 平均 "
+              f"{np.mean([int(m.sum()) for m in fold_masks]):.0f} / {n_feat_full} 特徴)")
+    else:
+        fold_masks = [np.ones(n_feat_full, dtype=bool) for _ in splits]
+
     preprocessors = config["preprocessors"]
     metric_keys = config.get("metrics", DEFAULT_METRICS)
     tkind = config.get("target_transform", "none")
@@ -148,12 +170,21 @@ def run_full_evaluation(X_train_spec, X_test_spec,
             test_folds = np.zeros((n_test, config["n_splits"]))
 
             for fi, (tr_idx, val_idx) in enumerate(splits):
-                # 前処理 (スペクトルのみに適用)
-                prep = SpectralPreprocessor(prep_name, config)
-                Xtr_s = prep.fit(X_train_spec[tr_idx]).transform(
-                    X_train_spec[tr_idx])
-                Xva_s = prep.transform(X_train_spec[val_idx])
-                Xte_s = prep.transform(X_test_spec)
+                mf = fold_masks[fi]
+                # fold ごとの選択次元に散乱補正の参照/波長軸を合わせる
+                fcfg = config
+                if sel_ref is not None or sel_wl is not None:
+                    fcfg = dict(config)
+                    if sel_ref is not None:
+                        fcfg["_scatter_ref"] = np.asarray(sel_ref)[mf]
+                    if sel_wl is not None:
+                        fcfg["_wavelengths"] = np.asarray(sel_wl)[mf]
+                # 前処理 (選択後スペクトルに適用)
+                prep = SpectralPreprocessor(prep_name, fcfg)
+                Xtr_s = prep.fit(X_train_spec[tr_idx][:, mf]).transform(
+                    X_train_spec[tr_idx][:, mf])
+                Xva_s = prep.transform(X_train_spec[val_idx][:, mf])
+                Xte_s = prep.transform(X_test_spec[:, mf])
 
                 # カテゴリ特徴量と結合
                 Xtr = np.hstack([Xtr_s, X_train_cat[tr_idx]])
@@ -175,7 +206,7 @@ def run_full_evaluation(X_train_spec, X_test_spec,
 
             # 乾燥曲線の後処理 (ボード単位の単調平滑化)。
             #   OOF とテストに同一処理を適用 → CV は honest なまま改善を反映。
-            oof = _smooth(oof, train_sn, groups, config)
+            oof = _smooth(oof, train_sn, smooth_board, config)
             test_mean = _smooth(test_folds.mean(axis=1), test_sn,
                                 test_groups, config)
 
@@ -271,7 +302,8 @@ def visualize_results(df_results: pd.DataFrame, config: dict,
 # Step 5: スタッキング (Ridge / Lasso メタ学習器)
 # ============================================================
 def run_stacking(df_results, all_oof_train, all_test_preds,
-                 y_train, config, groups=None, train_sn=None):
+                 y_train, config, groups=None, train_sn=None,
+                 train_board=None):
     """各モデルの最良前処理を使ってスタッキングを行う。
 
     Returns
@@ -286,6 +318,7 @@ def run_stacking(df_results, all_oof_train, all_test_preds,
 
     splits = make_splits(config, len(y_train), groups)
     clip = config.get("clip_predictions")
+    smooth_board = train_board if train_board is not None else groups
 
     best_per_model, _ = get_best_models(df_results)
     base_keys  = best_per_model["combo_key"].tolist()
@@ -309,7 +342,7 @@ def run_stacking(df_results, all_oof_train, all_test_preds,
         m.fit(oof_matrix[tr_idx], y_train[tr_idx])
         ridge_oof[val_idx] = m.predict(oof_matrix[val_idx])
     ridge_oof = clip_predictions(ridge_oof, clip)
-    ridge_oof = _smooth(ridge_oof, train_sn, groups, config)
+    ridge_oof = _smooth(ridge_oof, train_sn, smooth_board, config)
     ridge_cv = np.sqrt(mean_squared_error(y_train, ridge_oof))
 
     print(f"\n  [Stacking Ridge]  CV-RMSE = {ridge_cv:.4f}")
@@ -332,7 +365,7 @@ def run_stacking(df_results, all_oof_train, all_test_preds,
         m.fit(oof_matrix[tr_idx], y_train[tr_idx])
         lasso_oof[val_idx] = m.predict(oof_matrix[val_idx])
     lasso_oof = clip_predictions(lasso_oof, clip)
-    lasso_oof = _smooth(lasso_oof, train_sn, groups, config)
+    lasso_oof = _smooth(lasso_oof, train_sn, smooth_board, config)
     lasso_cv = np.sqrt(mean_squared_error(y_train, lasso_oof))
 
     print(f"\n  [Stacking Lasso]  CV-RMSE = {lasso_cv:.4f}")
@@ -348,7 +381,8 @@ def run_stacking(df_results, all_oof_train, all_test_preds,
 # ============================================================
 def run_weighted_average(df_results, all_oof_train, all_test_preds,
                          y_train, config, groups=None,
-                         train_sn=None, test_sn=None, test_groups=None):
+                         train_sn=None, test_sn=None, test_groups=None,
+                         train_board=None):
     """最適重みによる加重平均アンサンブル。
 
     Returns
@@ -362,6 +396,7 @@ def run_weighted_average(df_results, all_oof_train, all_test_preds,
 
     splits = make_splits(config, len(y_train), groups)
     clip = config.get("clip_predictions")
+    smooth_board = train_board if train_board is not None else groups
 
     best_per_model, _ = get_best_models(df_results)
     base_keys  = best_per_model["combo_key"].tolist()
@@ -395,7 +430,7 @@ def run_weighted_average(df_results, all_oof_train, all_test_preds,
         )
         wa_oof[val_idx] = oof_matrix[val_idx] @ cv_res.x
     wa_oof = clip_predictions(wa_oof, clip)
-    wa_oof = _smooth(wa_oof, train_sn, groups, config)
+    wa_oof = _smooth(wa_oof, train_sn, smooth_board, config)
     wa_cv = np.sqrt(mean_squared_error(y_train, wa_oof))
 
     print("\n  最適重み:")

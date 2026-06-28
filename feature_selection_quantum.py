@@ -74,9 +74,15 @@ def select_amplify(X, y, config):
     print(f"    QUBO 項数: {len(rows)} (閾値={threshold})")
 
     # 制約: ちょうど n_select 個を選択
-    constraint = equal_to(sum(q[i] for i in range(n_cand)), n_select)
-
-    model = Model(obj, constraint)
+    #   use_count_constraint=False で「特徴量数のペナルティ項」を外す → relevance と
+    #   redundancy のバランスだけで自然に個数が決まる (研究比較用)。
+    if cfg.get("use_count_constraint", True):
+        constraint = equal_to(sum(q[i] for i in range(n_cand)), n_select)
+        model = Model(obj, constraint)
+        print(f"    制約: ちょうど {n_select} 個")
+    else:
+        model = Model(obj)
+        print("    制約なし (個数ペナルティ項を除去 → 自然に個数が決まる)")
 
     # ---- Step 4: Amplify AE で求解 ----
     # ※ D-Wave に切り替える場合はここを DWaveSamplerClient に差し替え

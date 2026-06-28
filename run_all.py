@@ -103,7 +103,8 @@ def run_strategy(strategy_name,
                  X_train_spec, X_test_spec,
                  X_train_cat, X_test_cat,
                  y_train, df_test, config_fs, groups=None,
-                 train_sn=None, test_sn=None, test_groups=None):
+                 train_sn=None, test_sn=None, test_groups=None,
+                 train_board=None):
     """1 つの特徴量選択戦略でフルパイプラインを実行する。
 
     Returns
@@ -115,27 +116,31 @@ def run_strategy(strategy_name,
     t0 = time.time()
 
     # ---- 特徴量選択 ----
-    print("  特徴量選択:")
+    #   ★ CV の中(各 fold の train だけ)で選択する = リーク防止 (run_full_evaluation)。
+    #     ここで作る mask は「全データ基準」で、可視化(選択波長図)とサマリ表示にのみ使う。
+    print("  特徴量選択 (CV は fold 内で再選択; 下記は全データ基準の表示用):")
     mask = SELECTORS[strategy_name](X_train_spec, y_train, config_fs)
     n_sel = int(mask.sum())
-    print(f"  → {n_sel} / {X_train_spec.shape[1]} 特徴量を使用")
-
-    X_sel_train = X_train_spec[:, mask]
-    X_sel_test  = X_test_spec[:, mask]
+    print(f"  → 全データ基準 {n_sel} / {X_train_spec.shape[1]} 特徴 "
+          f"(実際の CV は fold ごとに再選択)")
 
     # ---- パイプライン設定 (提出先フォルダを戦略ごとに分離) ----
     config = copy.deepcopy(CONFIG)
     config["submission_dir"] = f"submissions_{strategy_name}"
     config["save_figures"] = False   # pipeline 内のヒートマップは省略 (figures は別途)
+    #   _scatter_ref / _wavelengths は全(生)スペクトル基準のまま渡す。
+    #   fold ごとの選択次元への整合は run_full_evaluation 内で行う。
 
-    # ---- モデル構築 → CV → スタッキング → 加重平均 → 提出 ----
+    # ---- モデル構築 → CV(fold内選択) → スタッキング → 加重平均 → 提出 ----
     models = build_all_models(config)
 
     df_results, all_oof_train, all_test_preds = run_full_evaluation(
-        X_sel_train, X_sel_test,
+        X_train_spec, X_test_spec,
         X_train_cat, X_test_cat,
         y_train, models, config, groups=groups,
         train_sn=train_sn, test_sn=test_sn, test_groups=test_groups,
+        train_board=train_board,
+        selector=SELECTORS[strategy_name], config_fs=config_fs,
     )
 
     best_per_model, overall_best = get_best_models(df_results)
@@ -143,13 +148,13 @@ def run_strategy(strategy_name,
     (meta_ridge, meta_lasso, test_matrix, ridge_cv, lasso_cv,
      _, ridge_oof, lasso_oof) = run_stacking(
         df_results, all_oof_train, all_test_preds, y_train, config,
-        groups=groups, train_sn=train_sn,
+        groups=groups, train_sn=train_sn, train_board=train_board,
     )
 
     opt_w, wa_cv, wa_test_pred, wa_oof = run_weighted_average(
         df_results, all_oof_train, all_test_preds, y_train, config,
         groups=groups, train_sn=train_sn, test_sn=test_sn,
-        test_groups=test_groups,
+        test_groups=test_groups, train_board=train_board,
     )
 
     create_all_submissions(
@@ -303,6 +308,9 @@ def main():
     #   test_groups         : テスト各行のボード ID (= species number)
     train_sn = df_train[CONFIG["id_col"]].values
     test_sn  = df_test[CONFIG["id_col"]].values
+    #   平滑化のボード ID は真のボード = species number (CV の groups とは別)
+    train_board = (df_train["species number"].values.astype(int)
+                   if "species number" in df_train.columns else None)
     test_groups = (df_test["species number"].values.astype(int)
                    if "species number" in df_test.columns else None)
 
@@ -343,6 +351,7 @@ def main():
             X_train_cat, X_test_cat,
             y_train, df_test, CONFIG_FS, groups=groups,
             train_sn=train_sn, test_sn=test_sn, test_groups=test_groups,
+            train_board=train_board,
         )
         results.append(summary)
 

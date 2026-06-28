@@ -113,7 +113,7 @@ def load_data(config: dict):
           f"(one-hot: {config['onehot_cols']})")
     print(f"  合計特徴量       : {X_train_spec.shape[1] + X_train_cat.shape[1]}")
     if groups is not None:
-        print(f"  推定ボード数     : {int(groups.max()) + 1}  "
+        print(f"  推定ボード数     : {len(np.unique(groups))}  "
               f"(GroupKFold でリーク防止)")
 
     return (df_train, df_test,

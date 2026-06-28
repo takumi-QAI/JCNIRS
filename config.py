@@ -71,25 +71,19 @@ ROBUST_MODELS = {
                               "colsample_bytree": 0.5, "min_child_samples": 20,
                               "reg_lambda": 2.0, "random_state": 42,
                               "verbose": -1}},
-    # ★ 実績ベース主力 (友人の EXPERIMENTS.md, v1/v11=LB 10.6)。
-    #   num_leaves=31・2000 本・早期終了・マルチシード平均。単発固定本数の
-    #   LightGBM (v16=LB 22) より honest に汎化する。A 系前処理(snv+sg_d1 等)と相性◎。
-    "LightGBM_MS": {"type": "lgbm_ms",
-                    "params": {"n_estimators": 2000, "learning_rate": 0.03,
-                               "num_leaves": 31, "subsample": 0.8,
-                               "colsample_bytree": 0.5, "min_child_samples": 20,
-                               "reg_lambda": 2.0, "verbose": -1,
-                               "n_seeds": 4, "val_fraction": 0.12,
-                               "es_rounds": 100}},
-    # マルチシード + 早期終了 XGBoost (分散低減)。LightGBM_MS と並ぶ主力候補。
-    "XGBoost_MS": {"type": "xgb_ms",
-                   "params": {"n_estimators": 2000, "learning_rate": 0.03,
-                              "max_depth": 4, "min_child_weight": 1,
-                              "subsample": 0.8, "colsample_bytree": 0.5,
-                              "reg_lambda": 2.0,
-                              "n_seeds": 4, "val_fraction": 0.12,
-                              "es_rounds": 50}},
 }
+
+# マルチシード + 早期終了 GBM (LightGBM_MS / XGBoost_MS)。
+#   ⚠ honest CV(0.9999) の実測で plain な浅い XGBoost/LightGBM に一貫して負け、
+#     かつ 4 seed × 2000 本で非常に低速(none 戦略だけで ~4.5h の主因)だったため
+#     既定から除外。試したい場合は ROBUST_MODELS に下記を追加する:
+#   "LightGBM_MS": {"type":"lgbm_ms","params":{"n_estimators":2000,"learning_rate":0.03,
+#       "num_leaves":31,"subsample":0.8,"colsample_bytree":0.5,"min_child_samples":20,
+#       "reg_lambda":2.0,"verbose":-1,"n_seeds":4,"val_fraction":0.12,"es_rounds":100}},
+#   "XGBoost_MS": {"type":"xgb_ms","params":{"n_estimators":2000,"learning_rate":0.03,
+#       "max_depth":4,"subsample":0.8,"colsample_bytree":0.5,"reg_lambda":2.0,
+#       "n_seeds":4,"val_fraction":0.12,"es_rounds":50}},
+#   (深さを浅く: XGBoost_MS max_depth=3 / LightGBM_MS num_leaves=15 にすると改善余地あり)
 
 # 深層モデル (研究レポートのモデル比較用)。
 #   ※ 1322 行・実質 150 ボードしか無いため honest CV では過学習しやすく、
@@ -154,15 +148,13 @@ CONFIG = {
     #   ボード単位 GroupKFold (リーク防止)。False で従来のランダム KFold。
     "cv_grouped":            True,
     #   ボード ID の決め方:
-    #     False = 隣接スペクトル相関でボードを推定 (group_corr_threshold)。★既定・LB較正済み
-    #             ~150 サブグループに分かれ「板内のそこそこ未知への汎化」を測る。実測で
-    #             CV≈14.6 が実 LB(embedded=14.49) とよく一致した。test の 6 板は全て内挿
-    #             (train 範囲内) なので、この粒度が LB の現実に最も近い。
-    #     True  = species number をそのままボード ID に使う = 完全な leave-one-board-out。
-    #             「未知の板を丸ごと当てる」honest な難易度だが、train の極端板(298%の外挿)
-    #             まで含むため LB(~14)より過大(~20)に出る。さらに過剰に悲観的なため頑健だが
-    #             平凡なモデル(RF 等)を選びがち。レポートで全板汎化を論じる時のみ True。
-    "group_by_species":      False,
+    #     True  = species number をそのままボード ID = 完全な leave-one-board-out。★既定・LB一致
+    #             実測で CV≈LB を確認 (LGB×emsc+sg_d1: species-CV 19.42 ≒ 実LB 19.56)。
+    #             「未知の板を丸ごと当てる」= test と同条件なので、CV がそのまま LB の目安。
+    #     False = 隣接スペクトル相関でボードを推定 (group_corr_threshold, ~150 サブグループ)。
+    #             板内リークで CV が楽観的(例: CV 13.99 でも LB 19.56)。CV と LB を一致させたい
+    #             なら True を使うこと。
+    "group_by_species":      True,
     "group_corr_threshold":  0.9999,  # 隣接スペクトル相関がこれ未満で別ボード
 
     # ── 目的変数の変換 / 予測の後処理 ─────────────────────
@@ -205,14 +197,17 @@ CONFIG = {
         "snv+detrend+sg_d1",   # ★ A_detrend: SNV → detrend → 1 次微分
         "snv+sg_d1+l2norm",    # ★ A_norm: SNV → 1 次微分 → L2 正規化
         "msc+sg_d2",           # B 系: MSC → 2 次微分
-        # --- 散乱補正の比較 (ドメインシフト対策) ---
-        "emsc",                # EMSC (多項式ベースライン + 乗法補正)
-        "emsc+sg_d1",          # EMSC → 1 次微分
-        "msc_t",               # MSC (トランスダクティブ参照)
-        "emsc_t+sg_d1",        # EMSC(トランスダクティブ) → 1 次微分
-        # --- 追加特徴の比較 ---
-        "snv+sg_d1+dwt",       # A 系 + 多重解像度ウェーブレット係数
-        "snv+wband",           # SNV + 水吸収バンド特徴
+        # --- 散乱補正 (honest CV で EMSC が当たり) ---
+        "emsc",                # ◎ EMSC (多項式ベースライン + 乗法補正)
+        "emsc+sg_d1",          # ★ EMSC → 1 次微分 (単体最良クラス)
+        # --- 追加特徴 (DWT が当たり) ---
+        "snv+sg_d1+dwt",       # ○ A 系 + 多重解像度ウェーブレット係数
+        # --- ★ 連結特徴 (友人の A/B/C)。species-LOSO で単体19.4→18.8 と最良 ---
+        #   複数前処理を別々に適用し横連結。次元は大きい(~4600)が honest に効く。
+        "concat:emsc+sg_d1|snv+sg_d1+dwt|msc+sg_d2",
+        # ── 以下は honest CV で効果無し → 既定から除外 ──
+        #   "msc_t" / "emsc_t+sg_d1" : 透過参照は非透過とほぼ同等〜悪化
+        #   "snv+wband"              : 水バンド特徴は改善せず
     ],
 
     # Savitzky-Golay パラメータ
@@ -289,9 +284,14 @@ CONFIG_FS = {
         "token":             os.environ.get("AMPLIFY_TOKEN", ""),
         "n_candidates":      300,   # 事前フィルタ: MI 上位 N 個を QUBO の候補に
         "n_features":        200,   # QUBO で最終的に選択する特徴量数
-        "lambda_redundancy": 0.5,   # 冗長性ペナルティの重み (大きい=多様性重視)
+        "lambda_redundancy": 0.5,   # 冗長性ペナルティの重み (0 で冗長項を無効化)
         "time_limit_ms":     5000,  # ソルバー実行時間 [ms]
         "corr_threshold":    0.1,   # QUBO 項のスパース化閾値
+        #   特徴量数のペナルティ(=ちょうど k 個の制約)を使うか。
+        #   False にすると個数制約を外し、relevance/redundancy だけで個数が決まる。
+        "use_count_constraint": True,
+        #   ※ 選択数のレパートリーを見たいときは n_features を変えて複数回実行する
+        #     (例: 100 / 200 / 400)。lambda_redundancy=0 で冗長項のみ無効化も可。
     },
 }
 
