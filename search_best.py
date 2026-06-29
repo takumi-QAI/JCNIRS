@@ -114,6 +114,15 @@ def histf(lr, leaves, l2):
     return lambda s=0: HistGradientBoostingRegressor(
         learning_rate=lr, max_leaf_nodes=leaves, l2_regularization=l2,
         max_iter=600, random_state=s)
+# マルチシード早期終了 LightGBM (= 友人 v1/v11 の LB≈10.6 勝ち筋。内部で複数 seed 平均)。
+#   2000 本 + 早期終了で本数を自動調整 → 固定本数より honest に汎化する。
+#   内部で seed 平均するため外側ループでは is_gbm=False (1 回) で扱う。
+def lgbmsf(nl=31, lr=0.02, cs=0.4, n=2000, ns=4):
+    return lambda s=0: MODEL_BUILDERS["lgbm_ms"](
+        {"n_estimators": n, "learning_rate": lr, "num_leaves": nl,
+         "subsample": 0.8, "subsample_freq": 1, "colsample_bytree": cs,
+         "min_child_samples": 20, "reg_lambda": 2.0, "verbose": -1,
+         "n_jobs": -1, "n_seeds": ns, "random_state": s}, CONFIG)
 def svrf(C, eps=0.05):
     return lambda s=0: SVR(kernel="rbf", C=C, epsilon=eps, gamma="scale")
 def krrf(a, g):
@@ -142,6 +151,9 @@ MODELS_FULL = [
     ("LGB_nl31c5", lgbf(31, 0.05, 0.5, 700),  True),
     ("LGB_nl63",   lgbf(63, 0.02, 0.3, 1200), True),
     ("LGB_nl127",  lgbf(127,0.02, 0.2, 1400), True),
+    # --- マルチシード早期終了 LightGBM (実証済み LB≈10-14 勝ち筋。内部で seed 平均) ---
+    ("LGBMS",      lgbmsf(31, 0.02, 0.4, 2000, 4), False),
+    ("LGBMS_nl63", lgbmsf(63, 0.02, 0.3, 2000, 4), False),
     # --- XGBoost: depth × learning_rate × colsample ---
     ("XGB_d2",     xgbf(2,  0.05, 0.5, 1000), True),
     ("XGB_d3",     xgbf(3,  0.05, 0.5, 800),  True),
@@ -184,6 +196,7 @@ MODELS_FULL = [
 ]
 MODELS_QUICK = [
     ("LGB_nl31c3", lgbf(31, 0.03, 0.3, 1000), True),
+    ("LGBMS",      lgbmsf(31, 0.02, 0.4, 1200, 3), False),
     ("XGB_d3",     xgbf(3, 0.05, 0.5, 800),   True),
     ("SVR_C10",    svrf(10),  False),
     ("ExtraT600",  etf(600),  False),

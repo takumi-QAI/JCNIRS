@@ -17,6 +17,7 @@ from .base import TORCH_AVAILABLE
 from . import (
     pls, pcr, ridge, lasso, elasticnet, svr, knn,
     random_forest, extratrees, xgboost_model, lightgbm_model,
+    lightgbm_ms,
 )
 # ---- 深層学習モデル (PyTorch) ----
 from . import (
@@ -26,6 +27,7 @@ from . import (
 _MODULES = [
     pls, pcr, ridge, lasso, elasticnet, svr, knn,
     random_forest, extratrees, xgboost_model, lightgbm_model,
+    lightgbm_ms,
     cnn1d, autoencoder, sae, vae, gan, deepspectra, transformer,
 ]
 
